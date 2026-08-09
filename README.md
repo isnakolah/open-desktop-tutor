@@ -116,6 +116,39 @@ Enable the Cloudflare Zero Trust organization manually, using `nomonlab` as the 
 
 Before any Calla DNS record is created, purchase/enable Advanced Certificate Manager and Total TLS. Wait for an active certificate that covers `node.calla.nomonlab.com` or `*.calla.nomonlab.com`; `*.nomonlab.com` does not cover the nested endpoint. [Advanced Certificate Manager](https://developers.cloudflare.com/ssl/edge-certificates/advanced-certificate-manager/)
 
+#### `cf-dns` tunnel and DNS lifecycle
+
+On this server, use the dedicated private `calla-control.toml` manifest with `cf-dns`; never adopt, edit, or reuse `nomonlab-public`. The desired Calla origins are deliberately loopback-only:
+
+```toml
+[hosts]
+"calla" = "http://127.0.0.1:18789"
+"node.calla" = "tcp://127.0.0.1:18789"
+```
+
+Run the read-only checks first. They prove the target-zone account, tunnel and DNS permissions, local origin reachability, and that no existing Calla CNAME will be overwritten:
+
+```bash
+cd /srv/app/cloudflare-dns
+cf-dns --manifest calla-control.toml doctor
+cf-dns --manifest calla-control.toml plan
+```
+
+Only after Zero Trust Access is enabled, the account-member identity policy and node Service Auth policy exist, and the nested certificate is active, publish the two managed CNAMEs:
+
+```bash
+cf-dns --manifest calla-control.toml reconcile
+cf-dns --manifest calla-control.toml published
+```
+
+`cf-dns` installs only `cf-dns-calla-control-tunnel.service`; its Cloudflare tunnel token is held in a root-owned `0600` environment file, never in the unit command, manifest, or repository. It keeps the tunnel up with a terminal 404 rule while the CNAMEs are absent. Remove only Calla resources with `cf-dns --manifest calla-control.toml destroy --yes`.
+
+Do not mix this lifecycle with `calla_cloudflare.py apply` for the same `calla-control` tunnel: both tools manage tunnel configuration and DNS. With `cf-dns` as the tunnel/DNS owner, create the two Access applications, policies, and the 90-day `calla-mac-node` service token in the Zero Trust dashboard. The human application is `calla.nomonlab.com`, uses the Cloudflare account-member identity provider and an eight-hour session; the node application is `node.calla.nomonlab.com` and has only a Service Auth policy for that token. Store the resulting client ID and secret only in the Mac Keychain during bootstrap.
+
+#### Repository-owned provisioning alternative
+
+If you do not use `cf-dns`, the repository provisioner is an all-in-one lifecycle owner. It must be the only tool that creates the Calla tunnel and DNS records:
+
 Create a least-privilege Cloudflare API token with only Cloudflare Tunnel, DNS, Access Apps and Policies, Access Identity Providers read, Access Service Tokens, and SSL Certificates read. Keep it runtime-only:
 
 ```bash
