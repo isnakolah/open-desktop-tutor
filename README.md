@@ -1,163 +1,212 @@
-# Open Desktop Tutor
+# Calla
 
-Open Desktop Tutor is an open-source, screen-aware teaching assistant for complex desktop applications. It teaches first: explain, highlight, point, let the learner try, verify, and escalate to bounded computer control only when the learner asks.
+Calla is a teaching-first assistant for complex desktop applications. It explains, highlights, points, lets the learner try, verifies the result, and only considers bounded input after an explicit request and a local approval.
 
-This repository is an early Phase 0 developer build. It currently includes:
+This repository is still named `open-desktop-tutor`. The stable protocol identifiers (`desktop-tutor`, `desktop-tutor.host`, and `tutor_*`) deliberately remain unchanged for compatibility. Blender is the first App Pack, not a limit on the core architecture.
 
-- a versioned App Pack format and compiler;
-- a Blender 4.3-4.5 starter pack with one authored Bevel lesson;
-- a packaged, read-only Blender observation bridge;
-- an OpenClaw plugin exposing semantic tutor operations instead of raw coordinates;
-- protocol schemas shared by the brain, Mac host, packs, and app bridges;
-- a Swift package containing the future Mac host's protocol models and action policy.
+## What is implemented here
 
-The native overlay, screen resolver, AI pointer, local approval window, and verified mouse-control loop are not built yet. The current Mac test proves the knowledge pack, Blender state bridge, OpenClaw plugin boundary, and Swift policy—not the finished tutoring experience.
+- a versioned App Pack compiler and a Blender 4.3–4.5 starter pack;
+- a read-only Blender observation bridge;
+- the Calla OpenClaw plugin, with separate `gateway`, `node`, and development-only `both` roles;
+- server-local App Pack retrieval from `~/.openclaw/calla/`, filtered by application version;
+- safety boundaries that reject raw coordinates and require owner identity plus one-shot approval for requested actions;
+- Cloudflare and macOS bootstrap tooling that is dry-run/confirmation gated.
 
-## Test it on a Mac
+The signed `Calla.app` / `TutorHost.app`, ScreenCaptureKit resolver, overlay, local approval UI, and real input loop remain macOS implementation work. The repository does not claim an end-to-end desktop-control demonstration until those pieces run on a Mac.
 
-### Requirements
+## Naming and architecture
 
-- macOS 13 or newer for development; the eventual ScreenCaptureKit target may raise this minimum;
-- Blender `>=4.3 <4.6` for the included pack;
-- Python 3.11 or newer;
-- Node.js and npm;
-- Git and Make;
-- Xcode Command Line Tools for `swift test`;
-- OpenClaw `>=2026.7.1-2` only if you want to inspect the brain plugin locally.
+| Contract | Value |
+| --- | --- |
+| Calla browser endpoint | `https://calla.nomonlab.com` |
+| Mac node endpoint | `node.calla.nomonlab.com` |
+| Dedicated tunnel | `calla-control` |
+| User-owned server state | `~/.openclaw/calla/` |
+| Mac service token | `calla-mac-node` |
+| Reserved, not provisioned | `packs.calla.nomonlab.com` |
 
-If a prerequisite is missing, install Xcode's tools with `xcode-select --install`. Homebrew is one convenient way to install Python, Node, and Blender, but it is not required.
-
-### Guided setup
-
-From the repository root:
-
-```bash
-./scripts/setup-macos.sh --check-only
-./scripts/setup-macos.sh
+```text
+Browser → Cloudflare Access → calla.nomonlab.com → existing loopback OpenClaw Gateway :18789
+                                                   → manually paired Mac OpenClaw node
+Mac cloudflared access tcp → node.calla.nomonlab.com → TCP tunnel → Gateway :18789
 ```
 
-The setup script shows five explicit stages. It creates `.venv`, installs this project into that environment, runs the available tests, builds the Blender App Pack, packages the Blender add-on, runs `swift test` when Swift is available, and prints the remaining Blender steps.
+The existing Gateway remains the only brain. It stays loopback-bound and retains OpenClaw token authentication as the second layer behind Cloudflare Access. Tailscale Serve remains a private recovery path.
 
-It does **not** silently modify Blender or OpenClaw. To explicitly link the plugin into the active OpenClaw installation on this Mac, use:
+## Complete setup
+
+The deployment order below is deliberate. It keeps the existing Gateway private, avoids sharing the old public tunnel, and keeps Cloudflare credentials out of the repository.
+
+### 0. Contain the old tunnel credential
+
+Before publishing Calla, rotate `nomonlab-public` if its token was exposed during prior inspection. In Cloudflare Dashboard, go to **Networking → Tunnels → nomonlab-public → Rotate token**; deliver the replacement through a protected channel; store it in a root-readable mode-`0600` file; and use cloudflared's `--token-file` in the existing systemd unit rather than an inline `ExecStart` token.
+
+Restart that existing tunnel in a maintenance window, then verify its Flix and Niko Kadi routes. Calla never discovers, adopts, or changes `nomonlab-public`; it owns only the new `calla-control` tunnel. [Cloudflare tunnel-token guidance](https://developers.cloudflare.com/tunnel/advanced/tunnel-tokens/)
+
+### 1. Local validation and Blender App Pack
+
+Requirements are Python 3.11+, Node.js/npm, Git, Make, and OpenClaw `>=2026.7.1-2`. macOS development additionally needs Xcode Command Line Tools; Blender 4.3–4.5 is required for the first App Pack and bridge.
 
 ```bash
-./scripts/setup-macos.sh --install-openclaw-plugin
+./scripts/setup-macos.sh --check-only # macOS; add --allow-non-macos only for CI validation
+make test pack-build blender-addon
 ```
 
-Do not use that flag when your Gateway runs on a dedicated server; follow the dedicated-server instructions below instead.
+For a developer Mac, the setup script's explicit Calla default is the safe `node` role—not the Gateway role. This compatibility-safe path does not configure a public proxy or secrets:
 
-### Install and verify the Blender bridge
+```bash
+./scripts/setup-macos.sh --install-calla-node
+```
 
-After guided setup:
+`--install-openclaw-plugin` remains an alias and now selects the same node role. Use the later macOS bootstrap step for the Keychain-backed Access proxy.
 
-1. Open Blender 4.3-4.5.
-2. Select **Edit → Preferences → Add-ons**.
-3. Choose **Install from Disk** and select `build/blender/open-desktop-tutor-blender-0.1.0.zip`.
-4. Enable **Interface: Open Desktop Tutor Bridge**.
-5. Leave Blender open with the default cube selected.
-6. In Terminal, run:
+On a Mac with Xcode tools:
+
+```bash
+swift test --package-path packages/swift/TutorKit
+```
+
+The bridge is read-only. Install `build/blender/open-desktop-tutor-blender-0.1.0.zip` from Blender's **Edit → Preferences → Add-ons → Install from Disk**, enable it, then run:
 
 ```bash
 .venv/bin/python tools/blender_bridge_probe.py --operation ping
 .venv/bin/python tools/blender_bridge_probe.py --operation observe_state
 ```
 
-A successful observation returns JSON containing the Blender version, current mode, active object, modifiers, and visible editor types. The probe never prints the bridge's session token.
+The descriptor contains a private session token. Never paste it, screenshots, OpenClaw configuration, Keychain data, or Cloudflare credentials into reports.
 
-The add-on only permits `ping` and `observe_state`. Its loopback descriptor lives temporarily under `~/Library/Caches/OpenDesktopTutor/`, is owner-readable only, and is deleted when the add-on stops.
+### 2. Gateway setup
 
-### Verify the Blender knowledge pack
+Calla uses the existing user-owned OpenClaw Gateway as its only brain. It preserves existing WhatsApp, active-memory, plugins, and Tailscale configuration.
 
-```bash
-make PYTHON=.venv/bin/python pack-check
-make PYTHON=.venv/bin/python pack-build
-make PYTHON=.venv/bin/python pack-search QUERY=bevel
-```
-
-The compiled pack is `build/packs/blender.otpack`. Searching for `bevel` should return the Bevel lesson, its success detector, and the non-destructive-modifier concept.
-
-### Manual setup
-
-The equivalent commands, without the guided script, are:
+Start with a read-only preflight and configuration preview:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -e .
-make PYTHON=.venv/bin/python test pack-build blender-addon
-swift test --package-path packages/swift/TutorKit
+python3 tools/calla_openclaw_setup.py --check
+python3 tools/calla_openclaw_setup.py --install
 ```
 
-If Swift is unavailable, install Xcode Command Line Tools and rerun only the last command.
-
-## OpenClaw as the user-owned brain
-
-OpenClaw may run on this Mac or on a dedicated server owned by the user. It chooses teaching moves and requests semantic operations. The future `TutorHost.app` on the Mac remains authoritative for screen capture, target freshness, local approvals, input dispatch, and verification.
-
-### Local Gateway
-
-The guided installer can link and inspect the plugin with `--install-openclaw-plugin`. To do it manually:
+The preview prints a schema-validated additive patch without writing configuration. After reviewing it, build and install the Blender App Pack:
 
 ```bash
-openclaw plugins install --link "$PWD/integrations/openclaw"
-openclaw plugins enable desktop-tutor
-openclaw plugins inspect desktop-tutor --runtime --json
+make pack-build
+python3 tools/calla_openclaw_setup.py --install --yes \
+  --app-pack build/packs/blender.otpack
+python3 tools/calla_openclaw_setup.py --status
 ```
 
-### Dedicated user-owned Gateway
-
-Run these commands on the Gateway server from its copy of this repository:
+The installer backs up the current config under `~/.openclaw/calla/backups/`, preserves a pre-existing plugin allowlist, adds only the Calla Control UI origin, creates owner-only Calla state, validates before completion, and restarts only if `--restart` is explicitly added. It writes a receipt, so this removes only installer-owned state:
 
 ```bash
-openclaw plugins install ./integrations/openclaw
-openclaw plugins enable desktop-tutor
-openclaw plugins inspect desktop-tutor --runtime --json
-openclaw nodes list --json
+python3 tools/calla_openclaw_setup.py --remove --yes
 ```
 
-After pairing the Mac node, copy its exact node ID and configure the plugin:
+| Role | Runs on | Registers |
+| --- | --- | --- |
+| `gateway` | Existing Gateway server | `tutor_*` tools, policy, paired-node invocation, server-local retrieval |
+| `node` | Paired Mac node | Only `desktop-tutor.host`, forwarding validated envelopes to TutorHost |
+| `both` | Development only | Both surfaces, only with `developmentMode: true` |
+
+`tutor_retrieve` runs at the Gateway and reads `~/.openclaw/calla/indexes/`, filtering by application bundle ID and version. It does not round-trip to the Mac. Until the real socket host exists, node commands return `TUTOR_HOST_UNAVAILABLE`.
+
+### 3. Cloudflare prerequisites and provisioning
+
+Enable the Cloudflare Zero Trust organization manually, using `nomonlab` as the team name where available. Configure Cloudflare as the identity provider with **Restrict to account members** enabled. The human Access policy uses the owning account's `cloudflare_account_member`, denying non-members. [Cloudflare identity-provider instructions](https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/cloudflare/)
+
+Before any Calla DNS record is created, purchase/enable Advanced Certificate Manager and Total TLS. Wait for an active certificate that covers `node.calla.nomonlab.com` or `*.calla.nomonlab.com`; `*.nomonlab.com` does not cover the nested endpoint. [Advanced Certificate Manager](https://developers.cloudflare.com/ssl/edge-certificates/advanced-certificate-manager/)
+
+Create a least-privilege Cloudflare API token with only Cloudflare Tunnel, DNS, Access Apps and Policies, Access Identity Providers read, Access Service Tokens, and SSL Certificates read. Keep it runtime-only:
 
 ```bash
-openclaw config set plugins.entries.desktop-tutor.config.nodeId '"PAIRED_MAC_NODE_ID"' --strict-json
-openclaw config set plugins.entries.desktop-tutor.config.requireOwnerIdentity true --strict-json
-openclaw config validate
+python3 tools/calla_cloudflare.py plan --account-id ACCOUNT_ID --zone-id ZONE_ID
+
+CALLA_CLOUDFLARE_API_TOKEN=... sudo -E python3 tools/calla_cloudflare.py apply \
+  --yes --account-id ACCOUNT_ID --zone-id ZONE_ID \
+  --service-token-output /root/calla-mac-node.json --install-service
 ```
 
-The plugin should register these tools:
+`plan` does not mutate Cloudflare. `apply --yes` refuses to proceed before the restricted identity provider and valid nested certificate exist. It creates only `calla-control`, the two ingress routes, two Access applications/policies, a 90-day `calla-mac-node` service token, Calla CNAME records, and an optional systemd unit which reads `/etc/calla/calla-control.token` using `--token-file`.
 
-- `tutor_observe`
-- `tutor_retrieve`
-- `tutor_point`
-- `tutor_propose_action`
-- `tutor_verify`
+The one-time Mac handoff JSON is mode `0600` and contains a Cloudflare client ID plus secret. Transfer it through an approved secure channel only: never source control, shell history, email, or a screenshot. Rotate it without changing OpenClaw pairing:
 
-Phase 0 warning: tool registration can be inspected now, but tutor calls requiring the Mac will fail until `TutorHost.app` supplies `~/Library/Application Support/OpenDesktopTutor/tutor-host.sock`. The repository does not yet claim an end-to-end OpenClaw-to-screen demonstration.
+```bash
+CALLA_CLOUDFLARE_API_TOKEN=... python3 tools/calla_cloudflare.py rotate-service-token --yes
+```
 
-## Troubleshooting
+Update the Mac Keychain immediately after rotation. `status` is ledger-only; `destroy --yes` removes only resources stored in Calla's ledger and retains the shared identity provider. [Tunnel routing](https://developers.cloudflare.com/tunnel/routing/) and [Access TCP proxy](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/non-http/cloudflared-authentication/arbitrary-tcp/)
 
-### No Blender descriptor found
+### 4. Mac node and explicit pairing
 
-Keep Blender open and confirm the add-on checkbox is enabled. Disable and re-enable it, then rerun the probe. The descriptor is intentionally removed whenever the bridge shuts down.
+Securely transfer the current service-token handoff to the Mac, then run:
 
-### Blender version rejected by the pack
+```bash
+./scripts/bootstrap-calla-mac.sh --check
+./scripts/bootstrap-calla-mac.sh --install --yes
+```
 
-The starter pack currently declares `>=4.3 <4.6`. Use Blender 4.3, 4.4, or 4.5 until another version mapping is authored and tested.
+The installer prompts for the Cloudflare service-token ID/secret and separate OpenClaw Gateway token. It stores all three in the login Keychain, configures the plugin in `node` mode, and creates `com.calla.openclaw-access-proxy` as a user LaunchAgent.
 
-### OpenClaw reports a missing TutorHost socket
+The plist contains only public hostname/listener values. The proxy reads Cloudflare secrets from Keychain immediately before running:
 
-That is expected in Phase 0. Plugin registration is testable; the native socket host is the next implementation milestone.
+```text
+cloudflared access tcp --hostname node.calla.nomonlab.com --url 127.0.0.1:18790
+```
 
-### macOS asks for Screen Recording or Accessibility permission
+The Mac OpenClaw node connects to `ws://127.0.0.1:18790`. Neither the plist, logs, nor cloudflared command arguments contain credentials. The future signed Calla app reads its Gateway token from Keychain; that native app is not generated by this Linux-hosted repository.
 
-The read-only Blender bridge does not need either permission. Do not grant them for this Phase 0 test. Those permissions will be requested by the signed native host only when its capture and control features exist.
+Request pairing from the Mac, then inspect and approve the exact pending identity from the server:
 
-### Reporting a Mac failure
+```bash
+openclaw nodes pending --json
+openclaw nodes approve --node EXACT_PENDING_NODE_ID
+python3 tools/calla_openclaw_setup.py --install --yes --node-id EXACT_APPROVED_NODE_ID
+```
 
-Include macOS, Blender, Python, Node, Swift, and OpenClaw versions; the failing command; and its output. Do not include bridge descriptors, session tokens, screen captures, or private OpenClaw configuration.
+No installer auto-approves a node, and a Cloudflare service token cannot bypass pairing. To remove only Mac-side Calla Keychain entries and its LaunchAgent:
 
-## Data and safety boundary
+```bash
+./scripts/bootstrap-calla-mac.sh --remove --yes
+```
 
-Phase 0 does not capture or upload screenshots. App Packs, compiled search indexes, test artifacts, and Blender observations stay on the user's machines. A remote OpenClaw Gateway remains user-owned, but future screen context sent to it will still require an explicit user-controlled privacy policy.
+### 5. Safety, verification, and troubleshooting
 
-There is intentionally no `click(x,y)`, shell, or arbitrary Blender Python tool in the brain protocol. Consequential actions will require a fresh semantic target receipt and local Mac approval.
+There is intentionally no `click(x,y)`, shell, CGEvent, arbitrary Blender code, or arbitrary app scripting tool in the brain protocol. Semantic targets are mandatory. The brain can suggest a teaching move, but the Mac host must resolve targets and make the final authorization decision.
 
-See the [Phase 0 architecture](docs/architecture/phase-0.md), [security policy](SECURITY.md), and [third-party review](third_party/NOTICE.md) for the current boundaries and dependency decisions.
+- Calls fail closed without host-verified owner identity; coordinate-shaped fields are recursively rejected.
+- System mutation needs a fresh semantic receipt, exact window identity, authored expected state, confidence, and local one-shot approval.
+- Password fields, authentication, purchases, messages, destructive operations, external submissions, and terminal/code execution prohibit mutations and demonstrations.
+- Screenshot persistence is disabled by default.
+
+Run every Linux-verifiable check:
+
+```bash
+make test
+python3 tools/calla_openclaw_setup.py --check
+python3 tools/calla_cloudflare.py plan --account-id ACCOUNT_ID --zone-id ZONE_ID
+```
+
+The tests cover role isolation, coordinate rejection, server-local version-filtered retrieval, typed missing-TutorHost errors, App Pack storage, installer idempotence/removal ownership, and nested certificate gating.
+
+Production acceptance still needs an operator and a permissioned Mac:
+
+1. an unauthenticated browser receives Cloudflare Access;
+2. a non-member Cloudflare account is denied;
+3. an authorized user reaches the Control UI, then still completes OpenClaw authentication;
+4. the node endpoint presents a valid nested certificate;
+5. the Mac proxy accepts the service token and revocation blocks new connections;
+6. pairing requires exact manual approval;
+7. the real TutorHost completes observe, point, requested action, and verify for a Blender lesson.
+
+Do not treat passing plugin, tunnel, or installer checks as evidence of the final macOS tutoring path. It remains blocked until the native Calla/TutorHost app is built and verified on macOS.
+
+## Command reference
+
+```text
+tools/calla_openclaw_setup.py --check | --install [--yes] | --status | --remove --yes
+tools/calla_cloudflare.py plan | apply --yes | status | rotate-service-token --yes | destroy --yes
+scripts/bootstrap-calla-mac.sh --check | --install --yes | --remove --yes
+tools/calla_pack_store.py COMPILED.otpack --state-directory ~/.openclaw/calla
+```
+
+Use `--help` on each command for optional paths and operational flags. See [SECURITY.md](SECURITY.md), [the architecture notes](docs/architecture/phase-0.md), and the legacy [deployment-guide link](docs/calla.md).

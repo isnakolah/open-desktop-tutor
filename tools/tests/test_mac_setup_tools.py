@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import stat
+import subprocess
 import tempfile
 import unittest
 import zipfile
@@ -27,6 +28,19 @@ bridge_probe = load_script("blender_bridge_probe.py")
 
 
 class MacSetupToolTests(unittest.TestCase):
+    def test_macos_setup_default_node_option_sets_the_node_role(self):
+        setup_script = REPOSITORY_ROOT / "scripts" / "setup-macos.sh"
+        source = setup_script.read_text(encoding="utf-8")
+        help_output = subprocess.run(
+            ["bash", str(setup_script), "--help"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        self.assertIn("--install-calla-node", help_output)
+        self.assertIn('"role":"node"', source)
+        self.assertIn("--install-openclaw-plugin", source)
+
     def test_addon_zip_has_blender_package_layout(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             output = Path(temporary_directory) / "addon.zip"

@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
+import os from "node:os";
+import path from "node:path";
 
 export const PROTOCOL_VERSION = 1;
 export const NODE_COMMAND = "desktop-tutor.host";
+export const CALLA_ROLES = Object.freeze(["gateway", "node", "both"]);
 export const TUTOR_TOOL_NAMES = Object.freeze([
   "tutor_observe",
   "tutor_retrieve",
@@ -93,13 +96,26 @@ export function validateNodeEnvelope(value) {
 
 export function parsePluginConfig(raw) {
   const config = raw && typeof raw === "object" ? raw : {};
+  const role = typeof config.role === "string" ? config.role.trim().toLowerCase() : "gateway";
+  if (!CALLA_ROLES.includes(role)) {
+    throw new TypeError("desktop-tutor role must be gateway, node, or both");
+  }
+  if (role === "both" && config.developmentMode !== true) {
+    throw new TypeError("desktop-tutor role both is development-only; set developmentMode to true explicitly");
+  }
   const nodeId =
     typeof config.nodeId === "string" && config.nodeId.trim() ? config.nodeId.trim() : null;
   const timeoutMs = Number.isSafeInteger(config.timeoutMs) ? config.timeoutMs : 10_000;
   if (timeoutMs < 1_000 || timeoutMs > 30_000) {
     throw new TypeError("desktop-tutor timeoutMs must be between 1000 and 30000");
   }
+  const configuredStateDirectory =
+    typeof config.stateDirectory === "string" && config.stateDirectory.trim()
+      ? config.stateDirectory.trim()
+      : "~/.openclaw/calla";
+  const stateDirectory = expandHomeDirectory(configuredStateDirectory);
   return {
+    role,
     nodeId,
     socketPath:
       typeof config.socketPath === "string" && config.socketPath.trim()
@@ -107,7 +123,15 @@ export function parsePluginConfig(raw) {
         : null,
     timeoutMs,
     requireOwnerIdentity: config.requireOwnerIdentity !== false,
+    stateDirectory,
+    developmentMode: config.developmentMode === true,
   };
+}
+
+function expandHomeDirectory(value) {
+  if (value === "~") return os.homedir();
+  if (value.startsWith("~/")) return path.join(os.homedir(), value.slice(2));
+  return path.resolve(value);
 }
 
 export function unwrapNodePayload(result) {

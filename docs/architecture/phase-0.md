@@ -7,14 +7,15 @@ Open Desktop Tutor teaches before it acts. The reasoning brain may be local or o
 ## Current component map
 
 ```text
-User-owned OpenClaw Gateway
+User-owned OpenClaw Gateway (Calla gateway role)
   desktop-tutor plugin
     tutor_observe / tutor_retrieve / tutor_point / tutor_propose_action / tutor_verify
     before_tool_call owner gate + one-shot action approval
+    server-local App Pack retrieval: ~/.openclaw/calla/{packs,indexes}
                  │
                  │ authenticated paired-node invocation
                  ▼
-OpenClaw node host on the user's Mac
+OpenClaw node host on the user's Mac (Calla node role)
   desktop-tutor.host
                  │
                  │ owner-only newline-delimited JSON over Unix socket
@@ -22,7 +23,7 @@ OpenClaw node host on the user's Mac
 TutorHost.app (next macOS spike)
   request validation
   capture allowlist and redaction
-  App Pack retrieval
+  local App Pack semantic target resolution
   semantic UI resolver
   deterministic ActionPolicy
   AI pointer / highlight

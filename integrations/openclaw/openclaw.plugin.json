@@ -3,8 +3,8 @@
   "activation": {
     "onStartup": true
   },
-  "name": "Open Desktop Tutor",
-  "description": "Connect an OpenClaw brain to a user-owned, teaching-first macOS TutorHost.",
+  "name": "Calla",
+  "description": "Connect the Calla OpenClaw brain to a user-owned, teaching-first macOS TutorHost.",
   "contracts": {
     "tools": [
       "tutor_observe",
@@ -18,6 +18,14 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "role": {
+        "enum": ["gateway", "node", "both"],
+        "default": "gateway"
+      },
+      "developmentMode": {
+        "type": "boolean",
+        "default": false
+      },
       "nodeId": {
         "type": "string",
         "minLength": 1
@@ -30,6 +38,11 @@
         "type": "integer",
         "minimum": 1000,
         "maximum": 30000
+      },
+      "stateDirectory": {
+        "type": "string",
+        "minLength": 1,
+        "default": "~/.openclaw/calla"
       },
       "requireOwnerIdentity": {
         "type": "boolean",

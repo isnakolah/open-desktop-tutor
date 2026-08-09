@@ -5,21 +5,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CHECK_ONLY=0
 SKIP_TESTS=0
-INSTALL_OPENCLAW_PLUGIN=0
+INSTALL_CALLA_NODE=0
 ALLOW_NON_MACOS=0
 
 usage() {
   cat <<'EOF'
 Usage: ./scripts/setup-macos.sh [options]
 
-Prepare the current Phase 0 build for testing on a Mac. The default run creates
-a Python virtual environment, runs tests, compiles the Blender App Pack, and
-packages the Blender add-on. It does not silently edit Blender or OpenClaw state.
+Prepare the current Calla developer build for testing on a Mac. The default run
+creates a Python virtual environment, runs tests, compiles the Blender App Pack,
+and packages the Blender add-on. It does not silently edit Blender or OpenClaw
+state.
 
 Options:
   --check-only                 Check prerequisites without installing or building
   --skip-tests                 Build artifacts without running the test suites
-  --install-openclaw-plugin    Explicitly link the plugin into this Mac's OpenClaw
+  --install-calla-node         Explicitly configure this Mac in the safe Calla node role
+  --install-openclaw-plugin    Backward-compatible alias for --install-calla-node
   --allow-non-macos            CI/developer override for checking the script on Linux
   -h, --help                   Show this help
 EOF
@@ -29,7 +31,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --check-only) CHECK_ONLY=1 ;;
     --skip-tests) SKIP_TESTS=1 ;;
-    --install-openclaw-plugin) INSTALL_OPENCLAW_PLUGIN=1 ;;
+    --install-calla-node|--install-openclaw-plugin) INSTALL_CALLA_NODE=1 ;;
     --allow-non-macos) ALLOW_NON_MACOS=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -56,11 +58,12 @@ command_version() {
   fi
 }
 
-step 1 "Confirming the current test boundary"
+step 1 "Confirming the current Calla test boundary"
 cat <<'EOF'
-This installer prepares the Phase 0 developer build. You can validate the App
-Pack and install/probe the read-only Blender bridge. The native overlay, semantic
-screen resolver, AI pointer, and approved-click loop are not built yet.
+This installer validates the App Pack and read-only Blender bridge. The native
+Calla overlay, semantic screen resolver, AI pointer, and approved-click loop are
+not built yet. A full remote node connection additionally needs the explicit
+Calla macOS bootstrap after Cloudflare provisioning.
 EOF
 
 platform="$(uname -s)"
@@ -109,7 +112,7 @@ if [[ ! -x .venv/bin/python ]]; then
 fi
 .venv/bin/python -m pip install -e .
 
-step 4 "Building and validating Phase 0"
+step 4 "Building and validating Calla foundations"
 if [[ "$SKIP_TESTS" -eq 1 ]]; then
   make PYTHON="$REPOSITORY_ROOT/.venv/bin/python" pack-check pack-build blender-addon
 else
@@ -119,15 +122,20 @@ if command -v swift >/dev/null 2>&1; then
   swift test --package-path packages/swift/TutorKit
 fi
 
-if [[ "$INSTALL_OPENCLAW_PLUGIN" -eq 1 ]]; then
-  command -v openclaw >/dev/null 2>&1 || fail "--install-openclaw-plugin requires the openclaw CLI"
+if [[ "$INSTALL_CALLA_NODE" -eq 1 ]]; then
+  command -v openclaw >/dev/null 2>&1 || fail "--install-calla-node requires the openclaw CLI"
   if openclaw plugins inspect desktop-tutor --json >/dev/null 2>&1; then
     printf 'OpenClaw plugin desktop-tutor is already installed; it was not overwritten.\n'
   else
     openclaw plugins install --link "$REPOSITORY_ROOT/integrations/openclaw"
   fi
   openclaw plugins enable desktop-tutor
+  calla_node_patch='{"plugins":{"entries":{"desktop-tutor":{"enabled":true,"config":{"role":"node","stateDirectory":"~/.openclaw/calla","requireOwnerIdentity":true}}}}}'
+  printf '%s' "$calla_node_patch" | openclaw config patch --stdin --dry-run >/dev/null
+  printf '%s' "$calla_node_patch" | openclaw config patch --stdin >/dev/null
+  openclaw config validate
   openclaw plugins inspect desktop-tutor --runtime --json
+  printf 'Configured this Mac in Calla node role; no Gateway tools were registered.\n'
 fi
 
 step 5 "Manual application steps"
@@ -141,8 +149,14 @@ cat <<EOF
 5. Verify App Pack retrieval:
    make -C "$REPOSITORY_ROOT" PYTHON="$REPOSITORY_ROOT/.venv/bin/python" pack-search QUERY=bevel
 
-OpenClaw is optional for this Phase 0 bridge test. For a dedicated user-owned
-Gateway, install the plugin on that server from integrations/openclaw, pair this
-Mac as a node, then set the plugin's nodeId. End-to-end tutor tools will remain
-unavailable until TutorHost.app supplies the local Unix socket.
+OpenClaw is optional for the read-only Blender bridge test. To prepare this Mac
+as the default Calla node role, rerun this script with --install-calla-node.
+For the remote Calla connection, first complete the server and Cloudflare steps
+in README.md, then run:
+  $REPOSITORY_ROOT/scripts/bootstrap-calla-mac.sh --check
+  $REPOSITORY_ROOT/scripts/bootstrap-calla-mac.sh --install --yes
+
+The bootstrap stores secrets in Keychain and starts the local Access TCP proxy.
+Pair the Mac by exact manual approval on the Gateway. End-to-end tutor tools
+remain unavailable until the native TutorHost.app supplies the local Unix socket.
 EOF

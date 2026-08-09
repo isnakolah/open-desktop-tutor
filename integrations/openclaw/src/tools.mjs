@@ -1,4 +1,5 @@
 import {buildTutorEnvelope, unwrapNodePayload} from "./protocol.mjs";
+import {retrieveLocalPacks} from "./local-retrieval.mjs";
 
 const baseSessionProperty = {
   session_id: {type: "string", minLength: 8, description: "Opaque TutorHost teaching session id."},
@@ -25,10 +26,21 @@ const definitions = {
     parameters: {
       type: "object",
       additionalProperties: false,
-      required: ["session_id", "query"],
+      required: ["session_id", "query", "application"],
       properties: {
         ...baseSessionProperty,
         query: {type: "string", minLength: 1, maxLength: 1000},
+        application: {
+          type: "object",
+          additionalProperties: false,
+          required: ["bundle_id", "version"],
+          properties: {
+            bundle_id: {type: "string", minLength: 1, maxLength: 255},
+            version: {type: "string", minLength: 1, maxLength: 80},
+            platform: {enum: ["macos", "windows", "linux"], default: "macos"},
+            locale: {type: "string", minLength: 2, maxLength: 20},
+          },
+        },
         entity_types: {type: "array", items: {type: "string"}, maxItems: 16},
         limit: {type: "integer", minimum: 1, maximum: 20, default: 5},
       },
@@ -94,12 +106,15 @@ export function createTutorTools(api, config) {
     name,
     ...definition,
     async execute(_toolCallId, params) {
+      const envelope = buildTutorEnvelope(name, params);
+      if (name === "tutor_retrieve") {
+        return jsonResult(await retrieveLocalPacks(config, envelope.payload));
+      }
       if (!config.nodeId) {
         throw new Error(
           "desktop-tutor is not configured: set plugins.entries.desktop-tutor.config.nodeId to the paired Mac node id",
         );
       }
-      const envelope = buildTutorEnvelope(name, params);
       const invoked = await api.runtime.nodes.invoke({
         nodeId: config.nodeId,
         command: "desktop-tutor.host",

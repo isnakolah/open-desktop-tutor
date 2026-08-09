@@ -6,6 +6,13 @@ import {validateNodeEnvelope} from "./protocol.mjs";
 
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 
+export class TutorHostUnavailableError extends Error {
+  constructor(message, cause) {
+    super(message, {cause});
+    this.name = "TutorHostUnavailableError";
+  }
+}
+
 export function defaultTutorSocketPath() {
   return path.join(os.homedir(), "Library", "Application Support", "OpenDesktopTutor", "tutor-host.sock");
 }
@@ -62,9 +69,20 @@ export async function invokeTutorHost(envelope, options = {}) {
 }
 
 export async function handleTutorNodeHostCommand(rawParams, options = {}) {
-  let envelope = rawParams;
-  if (typeof rawParams === "string") {
-    envelope = JSON.parse(rawParams);
+  try {
+    let envelope = rawParams;
+    if (typeof rawParams === "string") {
+      envelope = JSON.parse(rawParams);
+    }
+    return await invokeTutorHost(envelope, options);
+  } catch (error) {
+    if (error && ["ENOENT", "ECONNREFUSED", "EPIPE"].includes(error.code)) {
+      return {
+        ok: false,
+        code: "TUTOR_HOST_UNAVAILABLE",
+        message: "Calla TutorHost is not running or is not accepting local requests.",
+      };
+    }
+    throw error;
   }
-  return await invokeTutorHost(envelope, options);
 }
