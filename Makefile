@@ -2,7 +2,7 @@ PYTHON ?= python3
 PACKCTL := PYTHONPATH=tools/packctl/src $(PYTHON) -m open_tutor_pack
 BLENDER_ADDON := build/blender/open-desktop-tutor-blender-0.1.0.zip
 
-.PHONY: test pack-check pack-build pack-search blender-addon blender-test openclaw-test tools-test setup-macos
+.PHONY: test pack-check pack-build pack-search blender-addon blender-test openclaw-test tools-test setup setup-server setup-macos
 
 test: pack-check blender-test openclaw-test tools-test
 	PYTHONPATH=tools/packctl/src $(PYTHON) -m unittest discover -s tools/packctl/tests -v
@@ -28,6 +28,11 @@ openclaw-test:
 
 tools-test:
 	$(PYTHON) -m unittest discover -s tools/tests -v
+
+setup: setup-server
+
+setup-server:
+	./scripts/setup-calla-server.sh --install --yes
 
 setup-macos:
 	./scripts/setup-macos.sh

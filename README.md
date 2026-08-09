@@ -80,7 +80,16 @@ The descriptor contains a private session token. Never paste it, screenshots, Op
 
 Calla uses the existing user-owned OpenClaw Gateway as its only brain. It preserves existing WhatsApp, active-memory, plugins, and Tailscale configuration.
 
-Start with a read-only preflight and configuration preview:
+The default server setup uses the dedicated `cf-dns` Calla lifecycle. Its default is read-only; the install path builds the default Blender App Pack, installs the Gateway role, creates or validates the private `calla-control` manifest, and restarts the Gateway once. It does **not** publish Calla DNS:
+
+```bash
+./scripts/setup-calla-server.sh
+./scripts/setup-calla-server.sh --install --yes
+```
+
+`make setup` is the same confirmed server install. Use `--no-restart` only when you need to choose the Gateway restart window yourself.
+
+For manual or advanced Gateway setup, start with a read-only preflight and configuration preview:
 
 ```bash
 python3 tools/calla_openclaw_setup.py --check
@@ -215,8 +224,7 @@ Run every Linux-verifiable check:
 
 ```bash
 make test
-python3 tools/calla_openclaw_setup.py --check
-python3 tools/calla_cloudflare.py plan --account-id ACCOUNT_ID --zone-id ZONE_ID
+./scripts/setup-calla-server.sh --check
 ```
 
 The tests cover role isolation, coordinate rejection, server-local version-filtered retrieval, typed missing-TutorHost errors, App Pack storage, installer idempotence/removal ownership, and nested certificate gating.
@@ -237,6 +245,7 @@ Do not treat passing plugin, tunnel, or installer checks as evidence of the fina
 
 ```text
 tools/calla_openclaw_setup.py --check | --install [--yes] | --status | --remove --yes
+scripts/setup-calla-server.sh --check | --install --yes | --status
 tools/calla_cloudflare.py plan | apply --yes | status | rotate-service-token --yes | destroy --yes
 scripts/bootstrap-calla-mac.sh --check | --install --yes | --remove --yes
 tools/calla_pack_store.py COMPILED.otpack --state-directory ~/.openclaw/calla

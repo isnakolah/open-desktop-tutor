@@ -28,6 +28,22 @@ bridge_probe = load_script("blender_bridge_probe.py")
 
 
 class MacSetupToolTests(unittest.TestCase):
+    def test_server_setup_defaults_to_cf_dns_without_publication(self):
+        setup_script = REPOSITORY_ROOT / "scripts" / "setup-calla-server.sh"
+        source = setup_script.read_text(encoding="utf-8")
+        help_output = subprocess.run(
+            ["bash", str(setup_script), "--help"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        self.assertIn("--install", help_output)
+        self.assertIn("cf-dns", help_output)
+        self.assertIn('MODE="check"', source)
+        self.assertIn('"calla": "http://127.0.0.1:18789"', source)
+        self.assertIn('"node.calla": "tcp://127.0.0.1:18789"', source)
+        self.assertIn("No public CNAME was created", source)
+
     def test_macos_setup_default_node_option_sets_the_node_role(self):
         setup_script = REPOSITORY_ROOT / "scripts" / "setup-macos.sh"
         source = setup_script.read_text(encoding="utf-8")
