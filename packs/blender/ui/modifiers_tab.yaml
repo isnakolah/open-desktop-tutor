@@ -1,0 +1,26 @@
+id: blender.ui.properties.modifiers_tab
+title: Modifier Properties tab
+aliases: [Modifiers, wrench icon, Modifier Properties]
+app_versions: ">=4.3 <4.6"
+source_refs: [blender-manual]
+region: blender.ui.properties_editor
+resolve:
+  bridge:
+    selector:
+      editor_type: PROPERTIES
+      context: MODIFIER
+  accessibility:
+    candidates:
+      - role: AXRadioButton
+        label_regex: "(?i)modifier"
+      - role: AXButton
+        description_regex: "(?i)modifier"
+  visual:
+    icon: wrench
+    relative_to: properties_editor.vertical_context_tabs
+    constraints: [visible, enabled]
+disambiguate:
+  expected_neighbors: [object_data, particles]
+minimum_confidence:
+  point: 0.72
+  act: 0.92

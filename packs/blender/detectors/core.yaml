@@ -1,0 +1,34 @@
+entities:
+  - id: blender.detector.active_object_is_mesh
+    title: Active object is a mesh
+    app_versions: ">=4.3 <4.6"
+    source_refs: [open-tutor-authored]
+    provider: blender_bridge
+    query:
+      path: active_object.type
+      equals: MESH
+  - id: blender.detector.mode_is_object
+    title: Blender is in Object Mode
+    app_versions: ">=4.3 <4.6"
+    source_refs: [open-tutor-authored]
+    provider: blender_bridge
+    query:
+      path: mode
+      equals: OBJECT
+  - id: blender.detector.properties_context_is_modifier
+    title: Modifier Properties context is open
+    app_versions: ">=4.3 <4.6"
+    source_refs: [open-tutor-authored]
+    provider: blender_bridge
+    query:
+      path: properties_contexts
+      contains: MODIFIER
+  - id: blender.detector.active_object_has_bevel_modifier
+    title: Active object has a Bevel modifier
+    app_versions: ">=4.3 <4.6"
+    source_refs: [open-tutor-authored]
+    provider: blender_bridge
+    query:
+      path: active_object.modifiers
+      any:
+        type: BEVEL

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://open-desktop-tutor.org/schemas/app-pack/v1/entity.schema.json",
+  "title": "Open Desktop Tutor App Pack Entity",
+  "type": "object",
+  "required": ["id", "kind", "title"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "kind": {
+      "enum": ["concept", "terminology", "ui_target", "detector", "lesson", "workflow", "command", "shortcut", "recovery"]
+    },
+    "title": {"type": "string", "minLength": 1},
+    "aliases": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "app_versions": {"type": "string", "minLength": 1},
+    "source_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "text": {"type": "string"}
+  }
+}

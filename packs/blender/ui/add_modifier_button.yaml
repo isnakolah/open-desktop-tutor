@@ -1,0 +1,22 @@
+id: blender.ui.properties.add_modifier_button
+title: Add Modifier button
+aliases: [Add Modifier]
+app_versions: ">=4.3 <4.6"
+source_refs: [blender-manual]
+region: blender.ui.properties_editor
+resolve:
+  bridge:
+    selector:
+      editor_type: PROPERTIES
+      context: MODIFIER
+      control: ADD_MODIFIER
+  accessibility:
+    candidates:
+      - role: AXButton
+        label_regex: "(?i)add modifier"
+  visual:
+    text_regex: "(?i)add modifier"
+    constraints: [visible, enabled]
+minimum_confidence:
+  point: 0.75
+  act: 0.94

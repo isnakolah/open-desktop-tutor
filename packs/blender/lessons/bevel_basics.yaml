@@ -1,0 +1,44 @@
+id: blender.lesson.bevel_basics
+title: Add a non-destructive Bevel modifier
+aliases: [bevel a cube, beginner bevel lesson]
+app_versions: ">=4.3 <4.6"
+source_refs: [blender-manual, open-tutor-authored]
+objective: blender.skill.mesh.bevel_modifier
+concept_refs: [blender.concept.non_destructive_modifiers]
+prerequisites:
+  - detector: blender.detector.active_object_is_mesh
+  - detector: blender.detector.mode_is_object
+teaching_policy:
+  default_assistance: explain
+  escalation: [explain, highlight, point, offer_cursor, approved_click]
+steps:
+  - id: open_modifier_properties
+    instruction: Open the Modifier Properties tab. It is the wrench icon in the Properties editor on the right.
+    target: blender.ui.properties.modifiers_tab
+    hints:
+      - kind: verbal
+        text: Look for the vertical strip of property icons on the right.
+      - kind: highlight
+        target: blender.ui.properties_editor
+      - kind: point
+        target: blender.ui.properties.modifiers_tab
+    allowed_assistance:
+      - action: click
+        target: blender.ui.properties.modifiers_tab
+        reversible: true
+    success:
+      detector: blender.detector.properties_context_is_modifier
+  - id: add_bevel
+    instruction: Choose Add Modifier and select Bevel. Before changing it, notice that the cube is still the same base mesh.
+    target: blender.ui.properties.add_modifier_button
+    hints:
+      - kind: point
+        target: blender.ui.properties.add_modifier_button
+    success:
+      detector: blender.detector.active_object_has_bevel_modifier
+checkpoint:
+  explain: A modifier is non-destructive until it is applied. Its position in the stack changes the result.
+assessment:
+  prompt: Add a Bevel modifier to another mesh without hints.
+  pass:
+    detector: blender.detector.active_object_has_bevel_modifier

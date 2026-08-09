@@ -1,0 +1,47 @@
+{
+  "id": "desktop-tutor",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Open Desktop Tutor",
+  "description": "Connect an OpenClaw brain to a user-owned, teaching-first macOS TutorHost.",
+  "contracts": {
+    "tools": [
+      "tutor_observe",
+      "tutor_retrieve",
+      "tutor_point",
+      "tutor_propose_action",
+      "tutor_verify"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "nodeId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "socketPath": {
+        "type": "string",
+        "minLength": 1
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 1000,
+        "maximum": 30000
+      },
+      "requireOwnerIdentity": {
+        "type": "boolean",
+        "default": true
+      }
+    }
+  },
+  "toolMetadata": {
+    "tutor_observe": {"risk": "medium"},
+    "tutor_retrieve": {"risk": "low"},
+    "tutor_point": {"risk": "low"},
+    "tutor_propose_action": {"risk": "high"},
+    "tutor_verify": {"risk": "low"}
+  }
+}
