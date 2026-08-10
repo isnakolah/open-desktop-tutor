@@ -24,11 +24,30 @@ final class LessonRelay {
             guard !text.isEmpty else { return }
             send(text)
         case "stop":
-            PointerOverlay.shared.hide()
-            send("Stop the lesson here. I will ask again when I want to carry on.")
+            // No message to the model, and no waiting for one back. Stopping is
+            // something the learner does, not something they request.
+            TutorHostController.shared.stopLesson()
         default:
             break
         }
+    }
+
+    /// Begin one from the menu bar, for a learner who does not want to reach
+    /// for Raycast to say "show me this".
+    func startLesson() {
+        TutorHostController.shared.lessonActive = true
+        PointerOverlay.shared.narrate(step: "Calla", text: "Starting a lesson…",
+                                      status: "Calla — starting", thinking: true)
+        send("Look at my focused window and teach me what to do next.")
+    }
+
+    /// Drop whatever was in flight. A question already travelling would
+    /// otherwise come back and put a step on a screen the learner has finished
+    /// with.
+    func abort() {
+        inFlight?.terminate()
+        inFlight = nil
+        checking = false
     }
 
     private func send(_ message: String) {

@@ -102,6 +102,12 @@ final class TutorHostController: ObservableObject {
     static let shared = TutorHostController()
 
     @Published var captureActive = true
+    /// False once the learner has stopped the lesson, until they start another.
+    ///
+    /// Stopping has to be enforced here rather than asked of the model: a turn
+    /// already in flight will come back with another step, and "stop" that
+    /// leaves one more instruction on the screen is not a stop.
+    @Published var lessonActive = false
     @Published var status = "Starting local TutorHost"
     @Published var pendingApproval: PendingApproval?
 
@@ -137,6 +143,13 @@ final class TutorHostController: ObservableObject {
         do {
             try validateMacIngress(operation: request.operation, payload: request.payload)
             let payload: [String: JSONValue]
+            // Anything that draws is refused after a stop. Observing is what
+            // starts a lesson, so it is also what un-stops one.
+            if ["guide", "narrate", "point", "plan", "await_change"].contains(request.operation), !lessonActive {
+                return failure(request, "lesson_stopped",
+                               "The learner stopped this lesson. Say so and wait to be asked again.")
+            }
+            if request.operation == "observe" { lessonActive = true }
             switch request.operation {
             case "observe": payload = try await engine.observe(request.payload)
             case "guide": payload = try await engine.guide(request.payload)
@@ -178,6 +191,13 @@ final class TutorHostController: ObservableObject {
         }
         try engine.press(target)
         return try engine.evaluate(detector: detector, target: target)
+    }
+
+    /// End the lesson here and now.
+    func stopLesson() {
+        lessonActive = false
+        PointerOverlay.shared.hide()
+        LessonRelay.shared.abort()
     }
 
     func resolveApproval(_ approved: Bool) {

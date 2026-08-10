@@ -88,6 +88,9 @@ Rules that matter:
   app_bundle_id and say which one you are teaching. The overlay only appears
   while that application is in front, so your first message should tell them to
   switch back to it; the cursor will be waiting when they do.
+- If any call returns lesson_stopped, the learner has ended the lesson. Say so
+  in one line and stop. Do not observe again, do not offer to carry on, do not
+  ask why. They will start another when they want one.
 - If observe returns app_not_allowed, no application Calla is permitted to
   observe has been used recently. Tell them to focus the application once and
   add it in Calla's menu bar, rather than guessing bundle ids.`;

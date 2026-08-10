@@ -123,6 +123,13 @@ window. It is off by default: scoping kept making lessons vanish while the
 learner was working, and a lesson you have to go looking for is worse than one
 that sits over a neighbouring window.
 
+Starting and stopping sit next to the status in the menu bar: **Teach me…**
+when no lesson is running, **Find it** and **Stop** when one is. Stop is
+enforced here rather than asked of the model — a turn already in flight would
+otherwise come back and put one more instruction on a screen the learner has
+finished with. Anything that draws is refused with `lesson_stopped` until an
+observation starts the next lesson.
+
 A step ends when the learner says so — **Did it**, or `⌥⌘↩` — not when the
 pixels change. Calla then says it is checking, looks at the window, and either
 moves on or explains what is different and stays on the same step. Guessing from

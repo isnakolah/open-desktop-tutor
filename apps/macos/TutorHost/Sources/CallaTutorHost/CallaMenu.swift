@@ -77,10 +77,19 @@ struct CallaMenu: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            if case .ready = readiness {
+            // Starting and stopping are the two things worth reaching the menu
+            // bar for, so they sit next to the status rather than under Options.
+            if host.lessonActive {
                 Button("Find it") { PointerOverlay.shared.locate() }
                     .controlSize(.small)
                     .help("Flash Calla's pointer and tooltip where they are")
+                Button("Stop") { host.stopLesson() }
+                    .controlSize(.small)
+                    .help("End the lesson now")
+            } else if case .ready = readiness {
+                Button("Teach me…") { LessonRelay.shared.startLesson() }
+                    .controlSize(.small)
+                    .help("Ask Calla to teach whatever is on screen")
             }
             Circle().fill(statusTint).frame(width: 7, height: 7)
         }
