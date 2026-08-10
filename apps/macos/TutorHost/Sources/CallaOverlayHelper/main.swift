@@ -349,7 +349,13 @@ final class CallaOverlay {
         // pulling focus off the application being taught, which is the whole
         // reason the controls can live here at all.
         p.ignoresMouseEvents = !interactive
-        p.becomesKeyOnlyIfNeeded = !interactive
+        // Always true, including for the interactive tooltip. Clearing it makes
+        // the panel want key status, and a borderless non-activating panel that
+        // wants to be key stops compositing while its own application is
+        // inactive — which is always, since Calla never takes focus. The
+        // tooltip's buttons still take clicks without it; only the text field
+        // needs key status, and it asks for that itself when it appears.
+        p.becomesKeyOnlyIfNeeded = true
         p.isFloatingPanel = true
         p.level = .floating
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
