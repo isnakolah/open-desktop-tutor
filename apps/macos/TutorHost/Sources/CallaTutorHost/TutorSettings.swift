@@ -18,6 +18,13 @@ final class TutorSettings: ObservableObject {
         didSet { defaults.set(allowedBundleIDs, forKey: Key.allowedBundleIDs) }
     }
 
+    /// Show the overlay only while the application being taught is in front.
+    /// Off keeps it on screen wherever the learner goes, which is useful when
+    /// following a lesson across two applications.
+    @Published var overlayFollowsFocus: Bool {
+        didSet { defaults.set(overlayFollowsFocus, forKey: Key.overlayFollowsFocus) }
+    }
+
     /// Hide the tooltip while the learner's own pointer is over it, so it stops
     /// covering what is underneath. The pointer itself never hides.
     @Published var hideTooltipOnHover: Bool {
@@ -65,6 +72,7 @@ final class TutorSettings: ObservableObject {
     private enum Key {
         static let allowedBundleIDs = "allowedBundleIDs"
         static let hideTooltipOnHover = "hideTooltipOnHover"
+        static let overlayFollowsFocus = "overlayFollowsFocus"
         static let captureLongEdge = "captureLongEdge"
         static let cursorSize = "cursorSize"
         static let showStatusHUD = "showStatusHUD"
@@ -79,6 +87,7 @@ final class TutorSettings: ObservableObject {
         // must mean the shipped default, and bool(forKey:) cannot tell absent
         // from false.
         hideTooltipOnHover = defaults.object(forKey: Key.hideTooltipOnHover) as? Bool ?? true
+        overlayFollowsFocus = defaults.object(forKey: Key.overlayFollowsFocus) as? Bool ?? true
         let edge = defaults.object(forKey: Key.captureLongEdge) as? Int ?? 1600
         captureLongEdge = Self.captureLongEdgeChoices.contains(edge) ? edge : 1600
         let size = defaults.object(forKey: Key.cursorSize) as? Int ?? 30
@@ -91,6 +100,7 @@ final class TutorSettings: ObservableObject {
     func resetToDefaults() {
         allowedBundleIDs = Self.defaultAllowedBundleIDs
         hideTooltipOnHover = true
+        overlayFollowsFocus = true
         captureLongEdge = 1600
         cursorSize = 30
         showStatusHUD = true

@@ -244,6 +244,8 @@ struct CallaMenu: View {
                 }
                 Toggle("Hide the tooltip when I hover it", isOn: $settings.hideTooltipOnHover)
                     .font(.system(size: 12))
+                Toggle("Only over the app being taught", isOn: $settings.overlayFollowsFocus)
+                    .font(.system(size: 12))
                 Toggle("Status capsule", isOn: $settings.showStatusHUD)
                     .font(.system(size: 12))
                 HStack {

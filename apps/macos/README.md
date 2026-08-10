@@ -107,14 +107,20 @@ tested against something the behaviour changed, so acting on the answer changed
 the answer, and the tooltip shook or ping-ponged. Hiding moves and resizes
 nothing, so it cannot recur.
 
-A lesson shows its whole route: `tutor_plan` hands the Mac the steps up front
-and the tooltip lists them, done ones struck through, the current one lit. It is
-provisional — the model re-issues it when the screen turns out differently — so
-the learner can see where this is going without the plan becoming a script.
+A lesson knows its whole route — `tutor_plan` hands the Mac the steps up front —
+but shows one at a time. The header counts "Step 2 of 5", which carries the same
+shape in four words; listing every step made the tooltip tall enough to become
+the thing in the way. The plan is provisional: the model re-issues it when the
+screen turns out differently, so it never hardens into a script.
 
-Waiting looks like waiting: a ring pulses out of the pointer's tip and the
-tooltip shows moving dots while a request is in flight, including one asked for
-from Raycast, which tells the Mac before the request leaves.
+Waiting reads as progress rather than decoration: a dashed margin marches around
+the pointer's own outline, and a bar travels across the tooltip. A question asked
+from Raycast tells the Mac before the request leaves, so the wait starts
+immediately instead of when the answer lands.
+
+**Only over the app being taught** in Options scopes the overlay to the taught
+window. Turn it off to keep the lesson on screen while working across two
+applications.
 
 **Find it** in the menu bar pulses the pointer and tooltip where they already
 are, for a lesson lost on a large display.

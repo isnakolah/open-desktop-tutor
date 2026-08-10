@@ -1050,6 +1050,7 @@ final class PointerOverlay {
                          "width": window.width, "height": window.height],
               "owner": owner,
               "hide_on_hover": TutorSettings.shared.hideTooltipOnHover,
+              "follow_focus": TutorSettings.shared.overlayFollowsFocus,
               "cursor_size": TutorSettings.shared.cursorSize,
               "show_hud": TutorSettings.shared.showStatusHUD,
               "step": step, "text": text, "status": status, "index": stepIndex ?? -1])

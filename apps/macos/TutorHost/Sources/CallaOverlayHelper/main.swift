@@ -100,10 +100,12 @@ struct CallaCursor: View {
     /// artwork inside that panel instead.
     static let maxSize: CGFloat = 38
     static let defaultSize: CGFloat = 30
+    /// The working ring. Large enough to catch the eye from across a window.
+    static let ringSize: CGFloat = 46
 
     let size: CGFloat
     let thinking: Bool
-    @State private var pulse: CGFloat = 0
+    @State private var march: CGFloat = 0
 
     private var join: CGFloat {
         CallaPointerShape.cornerRadius * 2 * size / CallaPointerShape.viewBox
@@ -114,7 +116,7 @@ struct CallaCursor: View {
             if thinking { halo }
             pointer
         }
-        .frame(width: Self.maxSize + 22, height: Self.maxSize + 22, alignment: .topLeading)
+        .frame(width: Self.maxSize + Self.ringSize, height: Self.maxSize + Self.ringSize, alignment: .topLeading)
     }
 
     private var pointer: some View {
@@ -133,30 +135,30 @@ struct CallaCursor: View {
         .frame(width: Self.maxSize, height: Self.maxSize, alignment: .topLeading)
     }
 
-    /// Waiting has to look like waiting.
+    /// Waiting travels around the pointer's own outline.
     ///
-    /// A tilt of a few degrees was too subtle to read as anything, so a request
-    /// in flight now shows a ring expanding out of the pointer's tip — the same
-    /// language as a pulse, which people already read as "working". It is
-    /// anchored on the tip so it never suggests the pointer has moved.
+    /// A ring floating near the tip was both easy to miss and half-covered by
+    /// the tooltip. A dashed margin marching around the arrow itself cannot be
+    /// mistaken for anything else on screen, needs no room of its own, and
+    /// belongs unmistakably to the pointer rather than sitting beside it.
     private var halo: some View {
-        ZStack {
-            ForEach(0..<2, id: \.self) { index in
-                Circle()
-                    .stroke(Self.gradient, lineWidth: 2)
-                    .frame(width: 26, height: 26)
-                    .scaleEffect(0.45 + pulse * 1.15)
-                    .opacity((1 - pulse) * 0.8)
-                    .animation(
-                        .easeOut(duration: 1.1)
-                            .repeatForever(autoreverses: false)
-                            .delay(Double(index) * 0.55),
-                        value: pulse)
+        CallaPointerShape()
+            .stroke(Self.gradient,
+                    style: StrokeStyle(lineWidth: 2.5, lineCap: .round,
+                                       dash: [6, 5], dashPhase: march))
+            .frame(width: size, height: size, alignment: .topLeading)
+            // Grown from the tip, so the margin sits outside the artwork and the
+            // tip itself never appears to move.
+            .scaleEffect(1.34, anchor: UnitPoint(x: CallaPointerShape.tip.x / CallaPointerShape.viewBox,
+                                                 y: CallaPointerShape.tip.y / CallaPointerShape.viewBox))
+            .shadow(color: .black.opacity(0.35), radius: 2)
+            .frame(width: Self.maxSize + Self.ringSize, height: Self.maxSize + Self.ringSize,
+                   alignment: .topLeading)
+            .onAppear {
+                withAnimation(.linear(duration: 0.8).repeatForever(autoreverses: false)) {
+                    march = -22
+                }
             }
-        }
-        .offset(x: CallaPointerShape.tip.x / CallaPointerShape.viewBox * size - 13,
-                y: CallaPointerShape.tip.y / CallaPointerShape.viewBox * size - 13)
-        .onAppear { pulse = 1 }
     }
 }
 
@@ -173,11 +175,6 @@ struct CallaTooltip: View {
     let step: String
     let text: String
     let thinking: Bool
-    /// The route the model laid out up front, and where the lesson is in it.
-    /// Provisional by design — the model re-issues it when the screen turns out
-    /// differently, so this is what it expects, not a contract.
-    var plan: [String] = []
-    var planIndex: Int = 0
     /// Bumped by the ⌥⌘/ shortcut to open the question field.
     var startAsking: Int = 0
     var onEvent: ((String, String) -> Void)?
@@ -194,16 +191,21 @@ struct CallaTooltip: View {
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
-                if thinking { WaitingDots(accent: accent) }
+                if thinking {
+                    Text("working")
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .foregroundStyle(.tertiary)
+                }
             }
             Text(text)
                 .font(.system(size: 13))
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
-            // The whole route, not just the next thing. Being handed one
-            // instruction at a time with no shape to it gives the learner no
-            // idea how far in they are or how much is left.
-            if plan.count > 1 { flow }
+            // The route is not listed here. It was, and the tooltip grew tall
+            // enough to become the thing in the way — which is the problem this
+            // whole overlay is trying not to be. "Step 2 of 5" in the header
+            // carries the same shape in four words.
+            if thinking { WaitingBar(accent: accent) }
             if onEvent != nil { controls }
         }
         .padding(.horizontal, 14)
@@ -244,35 +246,6 @@ struct CallaTooltip: View {
         }
     }
 
-    /// Done steps struck through, the current one lit, the rest waiting. Capped
-    /// so a long lesson does not grow a tooltip taller than what it explains.
-    private var flow: some View {
-        let window = Self.visibleWindow(count: plan.count, index: planIndex)
-        return VStack(alignment: .leading, spacing: 3) {
-            Divider().padding(.vertical, 1)
-            ForEach(window, id: \.self) { index in
-                HStack(spacing: 6) {
-                    Image(systemName: index < planIndex ? "checkmark.circle.fill"
-                                                        : index == planIndex ? "circle.inset.filled" : "circle")
-                        .font(.system(size: 9))
-                        .foregroundStyle(index == planIndex ? AnyShapeStyle(accent) : AnyShapeStyle(.tertiary))
-                    Text(plan[index])
-                        .font(.system(size: 11, weight: index == planIndex ? .medium : .regular))
-                        .foregroundStyle(index == planIndex ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-                        .strikethrough(index < planIndex, color: .secondary)
-                        .lineLimit(1)
-                }
-            }
-        }
-    }
-
-    /// At most five rows, centred on where the lesson is.
-    static func visibleWindow(count: Int, index: Int) -> [Int] {
-        guard count > 5 else { return Array(0..<count) }
-        let start = min(max(index - 2, 0), count - 5)
-        return Array(start..<(start + 5))
-    }
-
     private func send() {
         let trimmed = question.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
@@ -301,26 +274,27 @@ struct CallaTooltip: View {
     }
 }
 
-/// Three dots that actually move, because "thinking" as static text reads as a
-/// label rather than as something in progress.
-struct WaitingDots: View {
+/// A bar that travels, because waiting should look like it is getting somewhere.
+///
+/// Dots that fade in turn say "busy" and nothing else. A band sweeping the width
+/// of the tooltip is the shape people already read as progress, and it costs one
+/// line of the layout rather than a row of its own.
+struct WaitingBar: View {
     let accent: Color
-    @State private var phase = 0.0
+    @State private var travelling = false
 
     var body: some View {
-        HStack(spacing: 3) {
-            ForEach(0..<3, id: \.self) { index in
-                Circle()
-                    .fill(accent)
-                    .frame(width: 4, height: 4)
-                    .opacity(0.35 + 0.65 * abs(sin(phase + Double(index) * 0.7)))
-            }
+        GeometryReader { geometry in
+            Capsule()
+                .fill(accent)
+                .frame(width: geometry.size.width * 0.34)
+                .offset(x: travelling ? geometry.size.width * 0.66 : 0)
+                .animation(.easeInOut(duration: 0.95).repeatForever(autoreverses: true),
+                           value: travelling)
         }
-        .onAppear {
-            withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) {
-                phase = .pi * 2
-            }
-        }
+        .frame(height: 2)
+        .background(Capsule().fill(accent.opacity(0.18)).frame(height: 2))
+        .onAppear { travelling = true }
     }
 }
 
@@ -396,12 +370,9 @@ final class CallaOverlay {
     /// repeat itself every call.
     private var plan: [String] = []
     private var planIndex = 0
-    /// Tall enough for two lines and the control row, plus a row per visible
-    /// step once there is a plan to show.
-    private var tooltipHeight: CGFloat {
-        let rows = CallaTooltip.visibleWindow(count: plan.count, index: planIndex).count
-        return 148 + (plan.count > 1 ? CGFloat(rows) * 17 + 10 : 0)
-    }
+    /// Two lines and the control row. Fixed: a tooltip that changes height is a
+    /// tooltip that moves, and moving is what makes it lose its arrow.
+    private let tooltipHeight: CGFloat = 148
 
     /// The learner pressed something in the tooltip. The host is listening on
     /// this process's stdout, because it owns the connection to Calla.
@@ -414,6 +385,7 @@ final class CallaOverlay {
     }
     private var pointerWatch: Timer?
     private var hideOnHover = true
+    private var followFocus = true
     private var hudEnabled = true
 
     /// The size the artwork is currently drawn at, inside a panel that is
@@ -427,7 +399,8 @@ final class CallaOverlay {
                 y: CallaPointerShape.tip.y / CallaPointerShape.viewBox * cursorPointSize)
     }
     /// Room for the pointer plus the thinking pulse around its tip.
-    private static let cursorSize = CGSize(width: CallaCursor.maxSize + 22, height: CallaCursor.maxSize + 22)
+    private static let cursorSize = CGSize(width: CallaCursor.maxSize + CallaCursor.ringSize,
+                                           height: CallaCursor.maxSize + CallaCursor.ringSize)
 
     /// Panel origin that places the pointer's tip exactly on `point`.
     private func cursorOrigin(for point: CGPoint) -> CGPoint {
@@ -514,10 +487,19 @@ final class CallaOverlay {
         tooltip?.setFrame(tooltipFrame(for: point), display: true)
         setThinking(false, step: step, text: text)
         self.status(status)
+        let arriving = tooltip?.alphaValue ?? 0 < 0.5
         narrating = true
         pointerIsOver = false
         Shortcuts.shared.claim()
         show()
+        if arriving {
+            tooltip?.alphaValue = 0
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.22
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                tooltip?.animator().alphaValue = 1
+            }
+        }
     }
 
     /// Scope the overlay to one application, and start following its focus.
@@ -534,10 +516,11 @@ final class CallaOverlay {
         applyVisibility()
     }
 
-    /// Kept only so the overlay can tell whether the learner is looking at the
-    /// taught application. It no longer decides whether anything is drawn.
     func frontmostApplicationChanged(to bundleID: String?) {
-        ownerIsFrontmost = owner == nil || bundleID == owner
+        let isOwner = owner == nil || bundleID == owner
+        guard isOwner != ownerIsFrontmost else { return }
+        ownerIsFrontmost = isOwner
+        applyVisibility()
     }
 
     /// Panels are ordered front during launch while parked off-screen and fully
@@ -550,23 +533,28 @@ final class CallaOverlay {
         applyVisibility()
     }
 
-    /// The overlay stays put.
+    /// The overlay belongs to the application being taught.
     ///
-    /// It used to hide whenever the learner looked at another application,
-    /// which meant a lesson vanished every time they checked something and had
-    /// to be found again. The step they are on is still the step they are on,
-    /// so the pointer and its words stay on screen until the lesson ends or the
-    /// owner switches teaching off in the menu bar. Placement is still scoped to
-    /// the taught window; visibility is not.
+    /// It is not drawn over anything else — a pointer floating above an unrelated
+    /// window is annotating something Calla knows nothing about. What made this
+    /// feel broken before was not the scoping but a missed activation
+    /// notification: the overlay would hide and never come back. Frontmost is
+    /// polled on the pointer timer now, so that cannot happen.
     private func applyVisibility() {
-        cursor?.alphaValue = 1
+        let onScreen = !followFocus || ownerIsFrontmost
+        cursor?.alphaValue = onScreen ? 1 : 0
         // The tooltip is the only thing that gets out of the way, and it does it
         // by disappearing rather than moving or fading: moving detached the
         // words from the arrow they belong to, and half-transparent text over a
         // busy interface is harder to read than either state.
-        tooltip?.alphaValue = narrating && !(hideOnHover && pointerIsOver) ? 1 : 0
-        hud?.alphaValue = narrating && hudEnabled ? 1 : 0
-        for panel in [cursor, tooltip, hud] { panel?.orderFrontRegardless() }
+        tooltip?.alphaValue = onScreen && narrating && !(hideOnHover && pointerIsOver) ? 1 : 0
+        hud?.alphaValue = onScreen && narrating && hudEnabled ? 1 : 0
+        guard onScreen else { return }
+        // Cursor last, so it is on top. The tooltip sits ten points from the
+        // tip and the working ring is wider than that, so ordering the pointer
+        // first buried the very thing that says Calla is busy. The pointer
+        // should never be behind its own words in any case.
+        for panel in [tooltip, hud, cursor] { panel?.orderFrontRegardless() }
     }
 
     /// Fade Calla's pointer as the learner's own pointer nears it.
@@ -645,6 +633,12 @@ final class CallaOverlay {
         tooltip?.makeKeyAndOrderFront(nil)
     }
 
+    func setFollowFocus(_ value: Bool) {
+        guard followFocus != value else { return }
+        followFocus = value
+        applyVisibility()
+    }
+
     func setHideOnHover(_ value: Bool) {
         guard hideOnHover != value else { return }
         hideOnHover = value
@@ -676,7 +670,10 @@ final class CallaOverlay {
         guard over != pointerIsOver else { return }
         pointerIsOver = over
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.12
+            // Long enough to read as the tooltip getting out of the way rather
+            // than blinking out, short enough not to be in the way while it does.
+            context.duration = over ? 0.16 : 0.22
+            context.timingFunction = CAMediaTimingFunction(name: over ? .easeIn : .easeOut)
             tooltip?.animator().alphaValue = over ? 0 : 1
         }
     }
@@ -800,18 +797,27 @@ final class CallaOverlay {
         cursor?.contentView = NSHostingView(rootView: CallaCursor(size: cursorPointSize, thinking: value))
         tooltip?.contentView = NSHostingView(rootView:
             CallaTooltip(accent: accent, step: plan.count > 1 ? progressLabel : step,
-                         text: text, thinking: value, plan: plan, planIndex: planIndex,
+                         text: text, thinking: value,
                          startAsking: askingRequested, onEvent: Self.emit))
     }
 
     /// Puts the narration away and leaves the pointer on screen. Calla is still
     /// active — the helper is still running — so the pointer still belongs
     /// there. `quit` is what ends the session.
+    /// End the lesson gently.
+    ///
+    /// Cutting the alpha to zero in one frame reads as the overlay being
+    /// yanked, which makes a finished lesson feel like a crash. A short fade,
+    /// and the pointer leaving last, gives it an ending.
     func hide() {
-        // Fade out rather than destroy: rebuilt panels would never composite.
         narrating = false
         Shortcuts.shared.release()
-        applyVisibility()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.28
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            tooltip?.animator().alphaValue = 0
+            hud?.animator().alphaValue = 0
+        }
     }
 
     func status(_ text: String) {
@@ -928,6 +934,7 @@ struct Command: Decodable {
     let window: WindowRect?
     let owner: String?
     let hide_on_hover: Bool?
+    let follow_focus: Bool?
     let steps: [String]?
     let index: Int?
     let cursor_size: Int?
@@ -1053,6 +1060,7 @@ Thread.detachNewThread {
                     guard let x = command.x, let y = command.y else { return }
                     CallaOverlay.shared.advancePlan(to: command.index)
                     CallaOverlay.shared.setHideOnHover(command.hide_on_hover ?? true)
+                    CallaOverlay.shared.setFollowFocus(command.follow_focus ?? true)
                     CallaOverlay.shared.apply(cursorSize: command.cursor_size.map(CGFloat.init),
                                               showHUD: command.show_hud)
                     CallaOverlay.shared.adopt(owner: command.owner, window: command.window.map(cocoa))
