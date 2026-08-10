@@ -60,11 +60,31 @@ builds and installs. The overlay renderer ships nested at
 `Contents/Helpers/CallaOverlayHelper.app` because AppKit panels only composite
 from a separate application of their own.
 
+## Shortcuts
+
+Answering Calla never needs the mouse, and the tooltip is a poor click target
+because it moves out from under your pointer:
+
+| | |
+| --- | --- |
+| `⌥⌘⏎` | Did it — look again and point at the next step |
+| `⌥⌘/` | Ask a question, typed into the tooltip |
+| `⌥⌘.` | Stop the lesson |
+
+These are Carbon hot keys rather than a global `NSEvent` monitor, which is what
+keeps them working without an Accessibility grant.
+
 ## Overlay scope
 
-The cursor and tooltip belong to the application being taught, not to the
-desktop. Every point carries that window's rect and bundle identifier, so the
-tooltip is placed inside the window rather than anywhere on the display, and the
-whole overlay fades out while the learner has another application in front and
-returns when they come back. Focus is read from `NSWorkspace`, which needs no
-permission of its own.
+The cursor and tooltip are placed against the taught window — the tooltip sits
+inside its bounds, and the pointer is clamped to it — so Calla never annotates
+something it is not teaching.
+
+They do not disappear when you look elsewhere. A lesson that vanished every time
+the learner checked something had to be found again, so the step stays on screen
+until the lesson ends or teaching is switched off in the menu bar.
+
+The pointer never fades; it is the thing being followed. The tooltip steps aside
+instead: when your own pointer reaches it, it moves to whichever corner of the
+cursor is furthest from your hand, because half-transparent text over a busy
+interface is worse than either being there or not.

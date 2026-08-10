@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import CoreImage
 import Foundation
 import SwiftUI
@@ -149,6 +150,8 @@ struct CallaTooltip: View {
     let step: String
     let text: String
     let thinking: Bool
+    /// Bumped by the ⌥⌘/ shortcut to open the question field.
+    var startAsking: Int = 0
     var onEvent: ((String, String) -> Void)?
 
     @State private var asking = false
@@ -179,6 +182,7 @@ struct CallaTooltip: View {
         .padding(.vertical, 12)
         .frame(width: 300, alignment: .leading)
         .animation(.easeOut(duration: 0.14), value: asking)
+        .onAppear { if startAsking > 0 { asking = true } }
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(.regularMaterial)
@@ -287,12 +291,18 @@ final class CallaOverlay {
     /// this is about not covering what the learner is trying to look at.
     private var proximityAlpha: CGFloat = 1
     private var tooltipAlpha: CGFloat = 1
+    /// Where the current step put the cursor, so the tooltip can be re-placed
+    /// around it without moving the pointer.
+    private var lastPoint: CGPoint?
+    private var askingRequested = 0
+    private var currentStep = ""
+    private var currentText = ""
     /// Tall enough for two lines and the control row beneath them.
     private let tooltipHeight: CGFloat = 148
 
     /// The learner pressed something in the tooltip. The host is listening on
     /// this process's stdout, because it owns the connection to Calla.
-    private static func emit(_ event: String, _ text: String) {
+    static func emit(_ event: String, _ text: String) {
         let payload: [String: Any] = ["event": event, "text": text]
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let line = String(data: data, encoding: .utf8) else { return }
@@ -384,7 +394,7 @@ final class CallaOverlay {
 
         let t = panel(CGRect(x: park.x, y: park.y, width: 300, height: tooltipHeight), interactive: true)
         t.contentView = NSHostingView(rootView: CallaTooltip(accent: accent, step: "", text: "",
-                                                             thinking: false, onEvent: Self.emit))
+                                                             thinking: false, startAsking: 0, onEvent: Self.emit))
         t.alphaValue = 0
         t.orderFrontRegardless(); tooltip = t
 
@@ -398,6 +408,7 @@ final class CallaOverlay {
 
     func begin(at rawPoint: CGPoint, step: String, text: String, status: String) {
         let point = clamped(rawPoint)
+        lastPoint = point
         cursor?.setFrameOrigin(cursorOrigin(for: point))
         tooltip?.setFrame(tooltipFrame(for: point), display: true)
         setThinking(false, step: step, text: text)
@@ -422,13 +433,10 @@ final class CallaOverlay {
         applyVisibility()
     }
 
-    /// The learner brought some other application forward, or came back.
+    /// Kept only so the overlay can tell whether the learner is looking at the
+    /// taught application. It no longer decides whether anything is drawn.
     func frontmostApplicationChanged(to bundleID: String?) {
-        guard let owner else { return }
-        let isOwner = bundleID == owner
-        guard isOwner != ownerIsFrontmost else { return }
-        ownerIsFrontmost = isOwner
-        applyVisibility()
+        ownerIsFrontmost = owner == nil || bundleID == owner
     }
 
     /// Panels are ordered front during launch while parked off-screen and fully
@@ -441,12 +449,18 @@ final class CallaOverlay {
         applyVisibility()
     }
 
+    /// The overlay stays put.
+    ///
+    /// It used to hide whenever the learner looked at another application,
+    /// which meant a lesson vanished every time they checked something and had
+    /// to be found again. The step they are on is still the step they are on,
+    /// so the pointer and its words stay on screen until the lesson ends or the
+    /// owner switches teaching off in the menu bar. Placement is still scoped to
+    /// the taught window; visibility is not.
     private func applyVisibility() {
-        let visible = ownerIsFrontmost
-        cursor?.alphaValue = visible ? proximityAlpha : 0
-        tooltip?.alphaValue = visible && narrating ? tooltipAlpha : 0
-        hud?.alphaValue = visible && narrating && hudEnabled ? 1 : 0
-        guard visible else { return }
+        cursor?.alphaValue = 1
+        tooltip?.alphaValue = narrating ? 1 : 0
+        hud?.alphaValue = narrating && hudEnabled ? 1 : 0
         for panel in [cursor, tooltip, hud] { panel?.orderFrontRegardless() }
     }
 
@@ -478,6 +492,17 @@ final class CallaOverlay {
         }
     }
 
+    /// Open the tooltip's question field from a shortcut.
+    func beginAsking() {
+        guard narrating else { return }
+        askingRequested += 1
+        tooltip?.contentView = NSHostingView(rootView:
+            CallaTooltip(accent: accent, step: currentStep, text: currentText,
+                         thinking: thinking, startAsking: askingRequested, onEvent: Self.emit))
+        // Key without activating: the learner keeps whatever they were in.
+        tooltip?.makeKeyAndOrderFront(nil)
+    }
+
     func setDimNearPointer(_ value: Bool) {
         guard dimNearPointer != value else { return }
         dimNearPointer = value
@@ -497,25 +522,28 @@ final class CallaOverlay {
         // what is already a running timer costs nothing and cannot miss.
         frontmostApplicationChanged(to: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
 
-        guard dimNearPointer, ownerIsFrontmost else { return }
+        guard dimNearPointer else { return }
         let pointer = NSEvent.mouseLocation
 
-        if let cursor {
-            let target = Self.fade(from: pointer, to: cursor.frame, begins: Self.fadeBegins)
-            if abs(target - proximityAlpha) > 0.01 {
-                proximityAlpha = target
-                cursor.alphaValue = target
-            }
-        }
-        // The tooltip is the bigger obstruction, and the learner reaching toward
-        // whatever is under it is exactly the moment to get out of the way. It
-        // fades on contact rather than on approach, so reading it does not
-        // require holding the pointer still somewhere else.
-        if let tooltip, narrating {
-            let target = Self.fade(from: pointer, to: tooltip.frame, begins: 24)
-            if abs(target - tooltipAlpha) > 0.01 {
-                tooltipAlpha = target
-                tooltip.alphaValue = target
+        // The pointer never fades. It is the one thing the learner is meant to
+        // be following, and a pointer that dims as you look toward it is a
+        // pointer that disappears exactly when it is being used.
+
+        // The tooltip moves instead of fading. Words you can seSe through are
+        // still in the way, and half-transparent text over a busy interface is
+        // worse than either. When the learner's pointer reaches it, it steps to
+        // whichever corner of the cursor is furthest from their hand.
+        if let tooltip, narrating, let anchor = lastPoint {
+            let reached = tooltip.frame.insetBy(dx: -12, dy: -12).contains(pointer)
+            if reached {
+                let moved = tooltipFrame(for: anchor, avoiding: pointer)
+                if abs(moved.minX - tooltip.frame.minX) > 1 || abs(moved.minY - tooltip.frame.minY) > 1 {
+                    NSAnimationContext.runAnimationGroup { context in
+                        context.duration = 0.16
+                        context.allowsImplicitAnimation = true
+                        tooltip.animator().setFrame(moved, display: true)
+                    }
+                }
             }
         }
     }
@@ -539,7 +567,14 @@ final class CallaOverlay {
     /// window pushes the words down, pointing near the bottom pushes them up,
     /// and the same for left and right. A window too small to hold it leaves
     /// nowhere legal to sit, so fall back to the display.
-    private func tooltipFrame(for point: CGPoint) -> CGRect {
+    /// Every place the words could legally sit, best first.
+    ///
+    /// Four corners around the cursor, ordered so the first is the side of the
+    /// window with more room — pointing near the top pushes the words down,
+    /// near the bottom pushes them up. `avoiding` re-sorts them by distance
+    /// from the learner's own pointer, which is how the tooltip steps aside
+    /// instead of fading.
+    private func tooltipSlots(for point: CGPoint) -> [CGRect] {
         let size = CGSize(width: 300, height: tooltipHeight)
         let display = (NSScreen.screens.first { $0.frame.contains(point) } ?? NSScreen.main!).frame
         var bounds = display
@@ -549,32 +584,56 @@ final class CallaOverlay {
         let gap: CGFloat = 26
         // Cocoa's y grows upward, so a cursor high on screen has a large y and
         // wants its words below it, at a smaller y.
-        let cursorIsHigh = point.y > bounds.midY
-        let cursorIsLeft = point.x < bounds.midX
+        let preferBelow = point.y > bounds.midY
+        let preferRight = point.x < bounds.midX
 
-        var x = cursorIsLeft ? point.x + gap : point.x - gap - size.width
-        var y = cursorIsHigh ? point.y - gap - size.height : point.y + gap
-        // Whichever side was chosen, it still has to fit; flip back if not.
-        if x < bounds.minX + 10 { x = point.x + gap }
-        if x + size.width > bounds.maxX - 10 { x = point.x - gap - size.width }
-        if y < bounds.minY + 10 { y = point.y + gap }
-        if y + size.height > bounds.maxY - 10 { y = point.y - gap - size.height }
-        x = min(max(x, bounds.minX + 10), bounds.maxX - size.width - 10)
-        y = min(max(y, bounds.minY + 10), bounds.maxY - size.height - 10)
-        return CGRect(origin: CGPoint(x: x, y: y), size: size)
+        let xs = preferRight ? [point.x + gap, point.x - gap - size.width]
+                             : [point.x - gap - size.width, point.x + gap]
+        let ys = preferBelow ? [point.y - gap - size.height, point.y + gap]
+                             : [point.y + gap, point.y - gap - size.height]
+
+        var slots: [CGRect] = []
+        for y in ys {
+            for x in xs {
+                let clampedX = min(max(x, bounds.minX + 10), bounds.maxX - size.width - 10)
+                let clampedY = min(max(y, bounds.minY + 10), bounds.maxY - size.height - 10)
+                slots.append(CGRect(origin: CGPoint(x: clampedX, y: clampedY), size: size))
+            }
+        }
+        return slots
+    }
+
+    private func tooltipFrame(for point: CGPoint) -> CGRect {
+        tooltipSlots(for: point)[0]
+    }
+
+    private func tooltipFrame(for point: CGPoint, avoiding pointer: CGPoint) -> CGRect {
+        tooltipSlots(for: point).max { left, right in
+            Self.distance(from: pointer, to: left) < Self.distance(from: pointer, to: right)
+        } ?? tooltipFrame(for: point)
+    }
+
+    private static func distance(from pointer: CGPoint, to rect: CGRect) -> CGFloat {
+        let dx = max(rect.minX - pointer.x, 0, pointer.x - rect.maxX)
+        let dy = max(rect.minY - pointer.y, 0, pointer.y - rect.maxY)
+        return (dx * dx + dy * dy).squareRoot()
     }
 
     func move(to rawPoint: CGPoint) {
         let point = clamped(rawPoint)
+        lastPoint = point
         cursor?.setFrameOrigin(cursorOrigin(for: point))
         tooltip?.setFrameOrigin(tooltipFrame(for: point).origin)
     }
 
     func setThinking(_ value: Bool, step: String, text: String) {
         thinking = value
+        currentStep = step
+        currentText = text
         cursor?.contentView = NSHostingView(rootView: CallaCursor(size: cursorPointSize, thinking: value))
         tooltip?.contentView = NSHostingView(rootView:
-            CallaTooltip(accent: accent, step: step, text: text, thinking: value, onEvent: Self.emit))
+            CallaTooltip(accent: accent, step: step, text: text, thinking: value,
+                         startAsking: askingRequested, onEvent: Self.emit))
     }
 
     /// Puts the narration away and leaves the pointer on screen. Calla is still
@@ -591,6 +650,68 @@ final class CallaOverlay {
     }
 }
 
+
+// MARK: - Shortcuts
+
+/// Answering Calla without touching the tooltip.
+///
+/// The tooltip moves out from under the learner's pointer, which makes it a
+/// poor thing to have to click, and reaching for it means leaving whatever they
+/// were doing anyway. These are system-wide hot keys.
+///
+/// Carbon's RegisterEventHotKey rather than an NSEvent global monitor on
+/// purpose: a global keyboard monitor needs Accessibility, and the whole point
+/// of this path is that it needs nothing but Screen Recording.
+@MainActor
+final class Shortcuts {
+    static let shared = Shortcuts()
+
+    /// ⌥⌘⏎ did it · ⌥⌘/ ask · ⌥⌘. stop
+    private static let bindings: [(id: UInt32, key: Int, event: String)] = [
+        (1, kVK_Return, "next"),
+        (2, kVK_ANSI_Slash, "ask"),
+        (3, kVK_ANSI_Period, "stop"),
+    ]
+
+    private var installed = false
+
+    func install(onEvent: @escaping (String) -> Void) {
+        guard !installed else { return }
+        installed = true
+        self.onEvent = onEvent
+
+        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
+                                 eventKind: UInt32(kEventHotKeyPressed))
+        InstallEventHandler(GetApplicationEventTarget(), { _, event, _ -> OSStatus in
+            var pressed = EventHotKeyID()
+            GetEventParameter(event, EventParamName(kEventParamDirectObject),
+                              EventParamType(typeEventHotKeyID), nil,
+                              MemoryLayout<EventHotKeyID>.size, nil, &pressed)
+            let id = pressed.id
+            DispatchQueue.main.async { MainActor.assumeIsolated { Shortcuts.shared.fire(id) } }
+            return noErr
+        }, 1, &spec, nil, nil)
+
+        let modifiers = UInt32(optionKey | cmdKey)
+        for binding in Self.bindings {
+            var reference: EventHotKeyRef?
+            RegisterEventHotKey(UInt32(binding.key), modifiers,
+                                EventHotKeyID(signature: OSType(0x43414C41), id: binding.id),
+                                GetApplicationEventTarget(), 0, &reference)
+        }
+    }
+
+    private var onEvent: ((String) -> Void)?
+
+    fileprivate func fire(_ id: UInt32) {
+        guard let binding = Self.bindings.first(where: { $0.id == id }) else { return }
+        if binding.event == "ask" {
+            CallaOverlay.shared.beginAsking()
+        } else {
+            onEvent?(binding.event)
+        }
+    }
+}
 
 // MARK: - Command loop
 
@@ -698,7 +819,10 @@ final class Runner {
 /// nothing reaches the screen.
 final class OverlayDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        MainActor.assumeIsolated { CallaOverlay.shared.prepare() }
+        MainActor.assumeIsolated {
+            CallaOverlay.shared.prepare()
+            Shortcuts.shared.install { event in CallaOverlay.emit(event, "") }
+        }
         // Follow the learner's attention. NSWorkspace reports this without any
         // Accessibility grant, so scoping the overlay to one application costs
         // no extra permission.
