@@ -1,7 +1,7 @@
 id: blender.ui.properties_editor
 title: Properties editor
 aliases: [Properties, Properties panel]
-app_versions: ">=4.3 <4.6"
+app_versions: ">=5.2 <5.3"
 source_refs: [blender-manual]
 region: main_window
 resolve:

@@ -28,22 +28,35 @@ def load_script(name: str):
 
 pack_store = load_script("calla_pack_store.py")
 gateway_setup = load_script("calla_openclaw_setup.py")
-cloudflare = load_script("calla_cloudflare.py")
 
 
 class CallaToolTests(unittest.TestCase):
+    def test_active_config_path_ignores_openclaw_warning_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config = Path(temporary_directory) / "openclaw.json"
+            config.write_text("{}", encoding="utf-8")
+            warning = "plugin desktop-tutor: duplicate plugin id resolved"
+            with patch.object(gateway_setup, "run", return_value=SimpleNamespace(stdout=f"{warning}\n{config}\n")):
+                self.assertEqual(gateway_setup.active_config_path("openclaw"), config)
+
     def test_compiled_pack_is_copied_to_server_local_index(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary = Path(temporary_directory)
             source = temporary / "blender.otpack"
+            prior_pack = temporary / "calla" / "packs" / "org.open-desktop-tutor.blender-0.1.0.otpack"
+            prior_index = temporary / "calla" / "indexes" / "org.open-desktop-tutor.blender-0.1.0.json"
+            prior_pack.parent.mkdir(parents=True)
+            prior_index.parent.mkdir(parents=True)
+            prior_pack.write_bytes(b"old-pack")
+            prior_index.write_text("{}", encoding="utf-8")
             manifest = {
                 "format": "open-desktop-tutor-pack",
                 "format_version": 1,
                 "entity_count": 1,
                 "pack": {
                     "id": "org.open-desktop-tutor.blender",
-                    "pack_version": "0.1.0",
-                    "apps": [{"platform": "macos", "bundle_ids": ["org.blenderfoundation.blender"], "versions": ">=4.3 <4.6", "locales": ["en"]}],
+                    "pack_version": "0.2.0",
+                    "apps": [{"platform": "macos", "bundle_ids": ["org.blenderfoundation.blender"], "versions": ">=5.2 <5.3", "locales": ["en"]}],
                 },
             }
             with zipfile.ZipFile(source, "w") as archive:
@@ -56,36 +69,41 @@ class CallaToolTests(unittest.TestCase):
             index = json.loads(index_path.read_text())
             self.assertEqual(index["format"], "calla-local-pack-index")
             self.assertEqual(index["entities"][0]["id"], "blender.lesson.bevel")
+            self.assertFalse(prior_pack.exists())
+            self.assertFalse(prior_index.exists())
+            self.assertEqual(result["removed_revisions"], 2)
 
     def test_gateway_patch_is_additive_and_records_ownership(self) -> None:
         patch, ownership = gateway_setup.build_gateway_patch(
             plugin_allow=["existing-plugin"],
+            plugin_paths=["/safe/existing-plugin", "/srv/app/.openclaw/apps/desktop-tutor"],
             allowed_origins=["https://private.nomonlab.com"],
             node_id="paired-mac-node",
             state_directory=Path("/safe/calla"),
+            plugin_path=Path("/safe/calla-plugin"),
         )
         self.assertEqual(patch["plugins"]["allow"], ["existing-plugin", "desktop-tutor"])
-        self.assertEqual(
-            patch["gateway"]["controlUi"]["allowedOrigins"],
-            ["https://private.nomonlab.com", "https://calla.nomonlab.com"],
-        )
+        self.assertEqual(patch["plugins"]["load"]["paths"], ["/safe/existing-plugin", "/safe/calla-plugin"])
+        self.assertNotIn("controlUi", patch["gateway"])
         self.assertEqual(patch["plugins"]["entries"]["desktop-tutor"]["config"]["nodeId"], "paired-mac-node")
-        self.assertEqual(ownership, {"plugin_allow_added": True, "origin_added": True})
+        self.assertFalse(patch["plugins"]["entries"]["desktop-tutor"]["config"]["requireOwnerIdentity"])
+        self.assertEqual(patch["gateway"]["auth"]["mode"], "none")
+        self.assertEqual(patch["gateway"]["bind"], "loopback")
+        self.assertEqual(patch["gateway"]["tailscale"]["mode"], "off")
+        self.assertEqual(ownership, {"plugin_allow_added": True, "plugin_path_added": True, "legacy_plugin_paths_removed": True, "legacy_origin_removed": False})
 
     def test_gateway_patch_does_not_create_an_allowlist_when_none_exists(self) -> None:
         patch, ownership = gateway_setup.build_gateway_patch(
             plugin_allow=None,
+            plugin_paths=None,
             allowed_origins=None,
             node_id=None,
             state_directory=Path("/safe/calla"),
+            plugin_path=Path("/safe/calla-plugin"),
         )
         self.assertNotIn("allow", patch["plugins"])
-        self.assertTrue(ownership["origin_added"])
-
-    def test_nested_certificate_must_be_active_and_cover_the_deep_hostname(self) -> None:
-        self.assertFalse(cloudflare.covers_nested_hostname([{"certificates": [{"status": "active", "hosts": ["*.nomonlab.com"]}]}]))
-        self.assertTrue(cloudflare.covers_nested_hostname([{"certificates": [{"status": "active", "hosts": ["*.calla.nomonlab.com"]}]}]))
-        self.assertFalse(cloudflare.covers_nested_hostname([{"certificates": [{"status": "pending_deployment", "hosts": ["node.calla.nomonlab.com"]}]}]))
+        self.assertEqual(patch["plugins"]["load"]["paths"], ["/safe/calla-plugin"])
+        self.assertFalse(ownership["legacy_origin_removed"])
 
     def test_gateway_installer_is_idempotent_and_removal_stays_in_calla_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -116,7 +134,11 @@ class CallaToolTests(unittest.TestCase):
                 return backup
 
             def read_for_install(_binary, path):
-                return ["existing-plugin"] if path == "plugins.allow" else ["https://private.nomonlab.com"]
+                if path == "plugins.allow":
+                    return ["existing-plugin"]
+                if path == "plugins.load.paths":
+                    return ["/existing-plugin", "/srv/app/.openclaw/apps/desktop-tutor"]
+                return ["https://private.nomonlab.com"]
 
             with redirect_stdout(io.StringIO()):
                 with (
@@ -124,21 +146,24 @@ class CallaToolTests(unittest.TestCase):
                     patch.object(gateway_setup, "read_json_config", side_effect=read_for_install),
                     patch.object(gateway_setup, "patch_config", side_effect=patch_config),
                     patch.object(gateway_setup, "backup_config", side_effect=backup_config),
-                    patch.object(gateway_setup, "install_plugin", side_effect=[True, False]),
                     patch.object(gateway_setup, "validate_config"),
                     patch.object(gateway_setup, "run", return_value=SimpleNamespace(stdout="", returncode=0)),
                 ):
                     self.assertEqual(gateway_setup.install(arguments), 0)
                     self.assertEqual(gateway_setup.install(arguments), 0)
             receipt = json.loads((state_directory / "install-receipt.json").read_text())
-            self.assertTrue(receipt["plugin_installed_by_calla"])
-            self.assertTrue(receipt["origin_added"])
+            self.assertFalse(receipt["legacy_origin_removed"])
+            self.assertTrue(receipt["plugin_path_added"])
             self.assertEqual(len([dry_run for _patch, dry_run in calls if dry_run]), 2)
 
             removal_calls: list[dict] = []
 
             def read_for_removal(_binary, path):
-                return ["desktop-tutor", "existing-plugin"] if path == "plugins.allow" else [gateway_setup.CALLA_ORIGIN, "https://private.nomonlab.com"]
+                if path == "plugins.allow":
+                    return ["desktop-tutor", "existing-plugin"]
+                if path == "plugins.load.paths":
+                    return [str(REPOSITORY_ROOT / "integrations" / "openclaw"), "/existing-plugin"]
+                return ["https://private.nomonlab.com"]
 
             def capture_removal(_binary, removal_patch, *, dry_run):
                 removal_calls.append(removal_patch)
@@ -159,7 +184,7 @@ class CallaToolTests(unittest.TestCase):
             final_patch = removal_calls[-1]
             self.assertEqual(final_patch["plugins"]["entries"]["desktop-tutor"], None)
             self.assertEqual(final_patch["plugins"]["allow"], ["existing-plugin"])
-            self.assertEqual(final_patch["gateway"]["controlUi"]["allowedOrigins"], ["https://private.nomonlab.com"])
+            self.assertEqual(final_patch["plugins"]["load"]["paths"], ["/existing-plugin"])
 
 
 if __name__ == "__main__":

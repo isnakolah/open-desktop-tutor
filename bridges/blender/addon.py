@@ -3,8 +3,8 @@
 bl_info = {
     "name": "Open Desktop Tutor Bridge",
     "author": "Open Desktop Tutor contributors",
-    "version": (0, 1, 0),
-    "blender": (4, 3, 0),
+    "version": (0, 2, 0),
+    "blender": (5, 2, 0),
     "location": "Preferences > Add-ons",
     "description": "Expose bounded read-only Blender state to the local Open Desktop Tutor host",
     "category": "Interface",

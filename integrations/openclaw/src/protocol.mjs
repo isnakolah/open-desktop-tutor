@@ -122,7 +122,7 @@ export function parsePluginConfig(raw) {
         ? config.socketPath.trim()
         : null,
     timeoutMs,
-    requireOwnerIdentity: config.requireOwnerIdentity !== false,
+    requireOwnerIdentity: config.requireOwnerIdentity === true,
     stateDirectory,
     developmentMode: config.developmentMode === true,
   };

@@ -1,6 +1,6 @@
 PYTHON ?= python3
 PACKCTL := PYTHONPATH=tools/packctl/src $(PYTHON) -m open_tutor_pack
-BLENDER_ADDON := build/blender/open-desktop-tutor-blender-0.1.0.zip
+BLENDER_ADDON := build/blender/open-desktop-tutor-blender-0.2.0.zip
 
 .PHONY: test pack-check pack-build pack-search blender-addon blender-test openclaw-test tools-test setup setup-server setup-macos
 

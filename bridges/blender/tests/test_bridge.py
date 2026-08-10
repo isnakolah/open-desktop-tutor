@@ -60,7 +60,7 @@ def fake_bpy():
     )
     return SimpleNamespace(
         context=context,
-        app=SimpleNamespace(version=(4, 5, 2), version_string="4.5.2", timers=ImmediateTimers()),
+        app=SimpleNamespace(version=(5, 2, 0), version_string="5.2.0", timers=ImmediateTimers()),
     )
 
 
@@ -77,7 +77,7 @@ def request(token: str, operation: str, payload=None):
 class BlenderBridgeTests(unittest.TestCase):
     def test_observer_returns_bounded_semantic_state(self):
         state = observe_state(fake_bpy())
-        self.assertEqual(state["blender"]["version_string"], "4.5.2")
+        self.assertEqual(state["blender"]["version_string"], "5.2.0")
         self.assertEqual(state["mode"], "OBJECT")
         self.assertEqual(state["active_object"]["type"], "MESH")
         self.assertEqual(state["active_object"]["modifiers"][0]["type"], "BEVEL")

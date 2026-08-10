@@ -1,7 +1,7 @@
 id: blender.lesson.bevel_basics
 title: Add a non-destructive Bevel modifier
 aliases: [bevel a cube, beginner bevel lesson]
-app_versions: ">=4.3 <4.6"
+app_versions: ">=5.2 <5.3"
 source_refs: [blender-manual, open-tutor-authored]
 objective: blender.skill.mesh.bevel_modifier
 concept_refs: [blender.concept.non_destructive_modifiers]

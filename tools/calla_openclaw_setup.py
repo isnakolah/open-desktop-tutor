@@ -17,8 +17,13 @@ from typing import Any
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ID = "desktop-tutor"
-CALLA_ORIGIN = "https://calla.nomonlab.com"
 DEFAULT_STATE_DIRECTORY = Path.home() / ".openclaw" / "calla"
+# This was the earlier workspace prototype. The standalone rewrite is now the
+# configured source of truth on this host, so never leave both IDs loadable.
+LEGACY_TUTOR_PLUGIN_PATHS = {"/srv/app/.openclaw/apps/desktop-tutor"}
+# The previous public setup added this browser-control origin. The private
+# one-user route does not need it, so remove only this exact obsolete value.
+LEGACY_CALLA_ORIGINS = {"https://calla.nomonlab.com"}
 
 
 class SetupError(RuntimeError):
@@ -57,31 +62,64 @@ def unique_append(values: Any, value: str) -> tuple[list[str] | None, bool]:
     return values if value in values else [*values, value], value not in values
 
 
+def remove_known(values: Any, known_values: set[str]) -> tuple[list[str] | None, bool]:
+    if values is None:
+        return None, False
+    if not isinstance(values, list) or not all(isinstance(item, str) for item in values):
+        raise SetupError("existing OpenClaw allowlist/origin configuration is not a string array")
+    remaining = [item for item in values if item not in known_values]
+    return remaining, len(remaining) != len(values)
+
+
 def build_gateway_patch(
     *,
     plugin_allow: Any,
+    plugin_paths: Any,
     allowed_origins: Any,
     node_id: str | None,
     state_directory: Path,
+    plugin_path: Path,
 ) -> tuple[dict[str, Any], dict[str, bool]]:
     allow, allow_added = unique_append(plugin_allow, PLUGIN_ID)
-    origins, origin_added = unique_append(allowed_origins, CALLA_ORIGIN)
+    paths, path_added = unique_append(plugin_paths, str(plugin_path))
+    legacy_paths_removed = False
+    if paths is not None:
+        legacy_paths_removed = any(path in LEGACY_TUTOR_PLUGIN_PATHS for path in paths)
+        paths = [path for path in paths if path not in LEGACY_TUTOR_PLUGIN_PATHS]
+    origins, legacy_origin_removed = remove_known(allowed_origins, LEGACY_CALLA_ORIGINS)
     plugin_config: dict[str, Any] = {
         "role": "gateway",
         "stateDirectory": str(state_directory),
-        "requireOwnerIdentity": True,
+        # This is a private, single-user installation. The local Mac still
+        # owns every Accessibility permission and action approval.
+        "requireOwnerIdentity": False,
     }
     if node_id:
         plugin_config["nodeId"] = node_id
     patch: dict[str, Any] = {
-        "plugins": {"entries": {PLUGIN_ID: {"enabled": True, "config": plugin_config}}},
-        "gateway": {"controlUi": {"allowedOrigins": origins or [CALLA_ORIGIN]}},
+        "plugins": {
+            "entries": {PLUGIN_ID: {"enabled": True, "config": plugin_config}},
+            "load": {"paths": paths or [str(plugin_path)]},
+        },
+        "gateway": {
+            "mode": "local",
+            "bind": "loopback",
+            "auth": {"mode": "none", "token": None},
+            # OpenClaw disallows auth:none for its own tailnet listener. The
+            # server setup therefore owns an external Tailscale HTTPS proxy to
+            # this loopback listener; the Gateway itself remains unexposed.
+            "tailscale": {"mode": "off", "resetOnExit": False},
+        },
     }
+    if legacy_origin_removed:
+        patch["gateway"]["controlUi"] = {"allowedOrigins": origins}
     if allow is not None:
         patch["plugins"]["allow"] = allow
     return patch, {
         "plugin_allow_added": allow_added,
-        "origin_added": allowed_origins is None or origin_added,
+        "plugin_path_added": path_added,
+        "legacy_plugin_paths_removed": legacy_paths_removed,
+        "legacy_origin_removed": legacy_origin_removed,
     }
 
 
@@ -112,10 +150,14 @@ def atomic_json(path: Path, value: dict[str, Any]) -> None:
 
 def active_config_path(binary: str) -> Path:
     result = run([binary, "config", "file"])
-    config_path = Path(result.stdout.strip()).expanduser()
-    if not config_path.is_file():
-        raise SetupError(f"OpenClaw config file does not exist: {config_path}")
-    return config_path
+    # OpenClaw can emit a boxed plugin warning before the final config path.
+    # Select an existing path from the output instead of treating the complete
+    # warning-and-path transcript as a filesystem name.
+    for line in reversed(result.stdout.splitlines()):
+        config_path = Path(line.strip()).expanduser()
+        if config_path.is_file():
+            return config_path
+    raise SetupError("OpenClaw config file path was not present in `openclaw config file` output")
 
 
 def backup_config(binary: str, state_directory: Path) -> Path:
@@ -138,20 +180,6 @@ def validate_config(binary: str) -> None:
     run([binary, "config", "validate"])
 
 
-def inspect_plugin(binary: str) -> bool:
-    return run([binary, "plugins", "inspect", PLUGIN_ID, "--runtime", "--json"], check=False).returncode == 0
-
-
-def install_plugin(binary: str, repository: Path) -> bool:
-    if inspect_plugin(binary):
-        return False
-    plugin_path = repository / "integrations" / "openclaw"
-    if not plugin_path.is_dir():
-        raise SetupError(f"Calla plugin not found: {plugin_path}")
-    run([binary, "plugins", "install", str(plugin_path)])
-    return True
-
-
 def install(arguments: argparse.Namespace) -> int:
     binary = arguments.openclaw_bin
     ensure_openclaw(binary)
@@ -159,12 +187,15 @@ def install(arguments: argparse.Namespace) -> int:
     prior_receipt_path = state_directory / "install-receipt.json"
     prior_receipt = json.loads(prior_receipt_path.read_text(encoding="utf-8")) if prior_receipt_path.is_file() else {}
     plugin_allow = read_json_config(binary, "plugins.allow")
+    plugin_paths = read_json_config(binary, "plugins.load.paths")
     allowed_origins = read_json_config(binary, "gateway.controlUi.allowedOrigins")
     patch, ownership = build_gateway_patch(
         plugin_allow=plugin_allow,
+        plugin_paths=plugin_paths,
         allowed_origins=allowed_origins,
         node_id=arguments.node_id,
         state_directory=state_directory,
+        plugin_path=arguments.repository.resolve() / "integrations" / "openclaw",
     )
     print("Calla additive OpenClaw patch:")
     print(json.dumps(patch, indent=2, sort_keys=True))
@@ -177,9 +208,7 @@ def install(arguments: argparse.Namespace) -> int:
         return 0
     prepare_state_directory(state_directory)
     backup = backup_config(binary, state_directory)
-    installed_plugin = False
     try:
-        installed_plugin = install_plugin(binary, arguments.repository.resolve())
         patch_config(binary, patch, dry_run=False)
         run([binary, "plugins", "enable", PLUGIN_ID])
         validate_config(binary)
@@ -192,9 +221,10 @@ def install(arguments: argparse.Namespace) -> int:
         "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "state_directory": str(state_directory),
         "config_backup": str(backup),
-        "plugin_installed_by_calla": prior_receipt.get("plugin_installed_by_calla", False) or installed_plugin,
         "plugin_allow_added": prior_receipt.get("plugin_allow_added", False) or ownership["plugin_allow_added"],
-        "origin_added": prior_receipt.get("origin_added", False) or ownership["origin_added"],
+        "plugin_path_added": prior_receipt.get("plugin_path_added", False) or ownership["plugin_path_added"],
+        "legacy_plugin_paths_removed": prior_receipt.get("legacy_plugin_paths_removed", False) or ownership["legacy_plugin_paths_removed"],
+        "legacy_origin_removed": prior_receipt.get("legacy_origin_removed", False) or ownership["legacy_origin_removed"],
     }
     atomic_json(state_directory / "install-receipt.json", receipt)
     if arguments.app_pack:
@@ -203,7 +233,7 @@ def install(arguments: argparse.Namespace) -> int:
     if arguments.restart:
         run([binary, "gateway", "restart"])
     print(f"Calla Gateway configuration installed. Backup: {backup}")
-    print("No Calla node was bound automatically. Review the connected Mac, then rerun this installer with `--node-id EXACT_APPROVED_NODE_ID`.")
+    print("The private Tailscale endpoint is ready for the bundled Mac bootstrap. The local enroller will bind the first pending node named Calla Mac.")
     return 0
 
 
@@ -234,7 +264,9 @@ def check(arguments: argparse.Namespace) -> int:
         "plugin_source": str(arguments.repository.resolve() / "integrations" / "openclaw"),
         "state_directory": str(state_directory),
         "state_exists": state_directory.is_dir(),
-        "requires_manual_pairing": True,
+        "gateway_auth": read_json_config(binary, "gateway.auth.mode"),
+        "gateway_bind": read_json_config(binary, "gateway.bind"),
+        "gateway_tailscale": read_json_config(binary, "gateway.tailscale.mode"),
     }, indent=2, sort_keys=True))
     return 0
 
@@ -252,16 +284,13 @@ def remove(arguments: argparse.Namespace) -> int:
     if receipt.get("format") != "calla-openclaw-install-receipt" or receipt.get("state_directory") != str(state_directory):
         raise SetupError("refusing to remove state that was not created by this Calla installer")
     plugin_allow = read_json_config(binary, "plugins.allow")
-    allowed_origins = read_json_config(binary, "gateway.controlUi.allowedOrigins")
+    plugin_paths = read_json_config(binary, "plugins.load.paths")
     plugins: dict[str, Any] = {"entries": {PLUGIN_ID: None}}
     if receipt.get("plugin_allow_added") and isinstance(plugin_allow, list):
         plugins["allow"] = [item for item in plugin_allow if item != PLUGIN_ID]
-    control_ui: dict[str, Any] = {}
-    if receipt.get("origin_added") and isinstance(allowed_origins, list):
-        control_ui["allowedOrigins"] = [item for item in allowed_origins if item != CALLA_ORIGIN]
+    if receipt.get("plugin_path_added") and isinstance(plugin_paths, list):
+        plugins["load"] = {"paths": [item for item in plugin_paths if item != str(arguments.repository.resolve() / "integrations" / "openclaw")]}
     patch: dict[str, Any] = {"plugins": plugins}
-    if control_ui:
-        patch["gateway"] = {"controlUi": control_ui}
     print("Calla removal patch:")
     print(json.dumps(patch, indent=2, sort_keys=True))
     patch_config(binary, patch, dry_run=True)
@@ -272,8 +301,6 @@ def remove(arguments: argparse.Namespace) -> int:
     except Exception:
         shutil.copy2(backup, active_config_path(binary))
         raise
-    if receipt.get("plugin_installed_by_calla"):
-        run([binary, "plugins", "uninstall", PLUGIN_ID], check=False)
     if arguments.restart:
         run([binary, "gateway", "restart"])
     shutil.rmtree(state_directory)
@@ -290,7 +317,7 @@ def parser() -> argparse.ArgumentParser:
     mode.add_argument("--remove", action="store_true", help="remove only state created by this installer")
     result.add_argument("--yes", action="store_true", help="confirm an install or removal")
     result.add_argument("--restart", action="store_true", help="perform one Gateway restart after successful validation")
-    result.add_argument("--node-id", help="exact manually approved Mac node id; omitted until pairing is approved")
+    result.add_argument("--node-id", help="optional existing Mac node id; normally set by the local auto-enroller")
     result.add_argument("--app-pack", type=Path, help="compiled .otpack to install in Calla server-local retrieval")
     result.add_argument("--state-directory", type=Path, default=DEFAULT_STATE_DIRECTORY)
     result.add_argument("--repository", type=Path, default=REPOSITORY_ROOT)

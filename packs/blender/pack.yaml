@@ -1,14 +1,14 @@
 schema_version: 1
 id: org.open-desktop-tutor.blender
 name: Blender
-pack_version: 0.1.0
+pack_version: 0.2.0
 license: CC-BY-SA-4.0
 code_license: Apache-2.0
 apps:
   - platform: macos
     bundle_ids:
       - org.blenderfoundation.blender
-    versions: ">=4.3 <4.6"
+    versions: ">=5.2 <5.3"
     locales: [en]
 capabilities:
   accessibility: partial

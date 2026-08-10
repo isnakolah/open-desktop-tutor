@@ -13,7 +13,7 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 BRIDGE_ROOT = REPOSITORY_ROOT / "bridges" / "blender"
 ADDON_PACKAGE = "open_desktop_tutor_blender"
-DEFAULT_OUTPUT = REPOSITORY_ROOT / "build" / "blender" / "open-desktop-tutor-blender-0.1.0.zip"
+DEFAULT_OUTPUT = REPOSITORY_ROOT / "build" / "blender" / "open-desktop-tutor-blender-0.2.0.zip"
 PACKAGE_FILES = {
     BRIDGE_ROOT / "addon.py": f"{ADDON_PACKAGE}/__init__.py",
     BRIDGE_ROOT / ADDON_PACKAGE / "observer.py": f"{ADDON_PACKAGE}/observer.py",

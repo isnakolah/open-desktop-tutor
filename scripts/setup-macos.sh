@@ -14,12 +14,13 @@ Usage: ./scripts/setup-macos.sh [options]
 
 Prepare the current Calla developer build for testing on a Mac. The default run
 creates a Python virtual environment, runs tests, compiles the Blender App Pack,
-and packages the Blender add-on. It does not silently edit Blender or OpenClaw
-state.
+and packages the optional read-only diagnostic add-on. `--install` also starts
+the native TutorHost and private OpenClaw node.
 
 Options:
   --check-only                 Check prerequisites without installing or building
   --skip-tests                 Build artifacts without running the test suites
+  --install                    Build, install, and connect the complete Calla Mac side
   --install-calla-node         Configure the Calla node and connect through private Tailscale
   --install-openclaw-plugin    Backward-compatible alias for --install-calla-node
   --allow-non-macos            CI/developer override for checking the script on Linux
@@ -31,7 +32,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --check-only) CHECK_ONLY=1 ;;
     --skip-tests) SKIP_TESTS=1 ;;
-    --install-calla-node|--install-openclaw-plugin) INSTALL_CALLA_NODE=1 ;;
+    --install|--install-calla-node|--install-openclaw-plugin) INSTALL_CALLA_NODE=1 ;;
     --allow-non-macos) ALLOW_NON_MACOS=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -60,10 +61,10 @@ command_version() {
 
 step 1 "Confirming the current Calla test boundary"
 cat <<'EOF'
-This installer validates the App Pack and read-only Blender bridge. The native
-Calla overlay, semantic screen resolver, AI pointer, and approved-click loop are
-not built yet. A full remote node connection additionally needs the explicit
-Calla macOS bootstrap after Cloudflare provisioning.
+This installer builds the Blender 5.2 App Pack, starts the native local
+TutorHost, and connects the Calla node through the private Tailscale Gateway.
+No OpenClaw login token or hand-edited configuration is needed for the default
+path. macOS will still ask for Accessibility permission.
 EOF
 
 platform="$(uname -s)"
@@ -97,7 +98,13 @@ fi
 if [[ -d /Applications/Blender.app ]]; then
   printf '  %-10s %s\n' "Blender" "/Applications/Blender.app"
 else
-  printf '  %-10s %s\n' "Blender" "not found in /Applications (install Blender 4.3-4.5 to test the pack)"
+  printf '  %-10s %s\n' "Blender" "not found in /Applications (install Blender 5.2.x to test the pack)"
+fi
+
+if [[ "$INSTALL_CALLA_NODE" -eq 1 ]]; then
+  for required_command in openclaw tailscale xcrun; do
+    command -v "$required_command" >/dev/null 2>&1 || fail "--install requires $required_command on this Mac"
+  done
 fi
 
 if [[ "$CHECK_ONLY" -eq 1 ]]; then
@@ -123,27 +130,17 @@ if command -v swift >/dev/null 2>&1; then
 fi
 
 if [[ "$INSTALL_CALLA_NODE" -eq 1 ]]; then
-  "$REPOSITORY_ROOT/scripts/bootstrap-calla-mac.sh" --install --yes --transport tailscale
+  "$REPOSITORY_ROOT/scripts/bootstrap-calla-mac.sh" --install --yes
 fi
 
-step 5 "Manual application steps"
+step 5 "Ready to teach"
 cat <<EOF
-1. In Blender 4.3-4.5, open Edit > Preferences > Add-ons.
-2. Choose Install from Disk and select:
-   $REPOSITORY_ROOT/build/blender/open-desktop-tutor-blender-0.1.0.zip
-3. Enable "Interface: Open Desktop Tutor Bridge" and keep Blender open.
-4. Back in Terminal, verify the real bridge state:
-   $REPOSITORY_ROOT/.venv/bin/python $REPOSITORY_ROOT/tools/blender_bridge_probe.py --operation observe_state
-5. Verify App Pack retrieval:
-   make -C "$REPOSITORY_ROOT" PYTHON="$REPOSITORY_ROOT/.venv/bin/python" pack-search QUERY=bevel
+Open Blender 5.2.x and keep it focused while teaching. `--install` has already
+started the native TutorHost and Calla node over private Tailscale WSS; no
+Gateway login, node ID, or Blender add-on configuration is required. The
+Gateway enrols this Mac automatically.
 
-OpenClaw is optional for the read-only Blender bridge test. The quickest remote
-Calla test is private to the tailnet and needs only the Gateway token:
-  $REPOSITORY_ROOT/scripts/bootstrap-calla-mac.sh --install --yes
-
-Or rerun this script with --install-calla-node to build and connect in one
-step. The bootstrap stores the token in Keychain and starts the node host over
-Tailscale WSS. Pair the Mac by exact manual approval on the Gateway.
-End-to-end tutor tools remain unavailable until the native TutorHost.app
-supplies the local Unix socket.
+For optional read-only bridge diagnostics, install the generated add-on from
+Blender's Add-ons preferences, then run:
+  $REPOSITORY_ROOT/.venv/bin/python $REPOSITORY_ROOT/tools/blender_bridge_probe.py --operation observe_state
 EOF

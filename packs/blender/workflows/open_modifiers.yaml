@@ -1,7 +1,7 @@
 id: blender.workflow.open_modifier_properties
 title: Open Modifier Properties
 aliases: [open modifiers, find the wrench tab]
-app_versions: ">=4.3 <4.6"
+app_versions: ">=5.2 <5.3"
 source_refs: [open-tutor-authored]
 goal: Make the Modifier Properties context visible for the active object.
 steps:

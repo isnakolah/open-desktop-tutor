@@ -6,11 +6,14 @@ The plugin identifier remains `desktop-tutor`; Calla is the user-facing name. It
 
 | Role | Runs on | Registers |
 | --- | --- | --- |
-| `gateway` | Existing user-owned OpenClaw Gateway | `tutor_*` tools, owner/action policy, paired-node invocation, server-local retrieval |
+| `gateway` | Existing user-owned OpenClaw Gateway | `tutor_*` tools, local action policy, paired-node invocation, server-local retrieval |
 | `node` | Paired macOS OpenClaw node | Only `desktop-tutor.host`, forwarding validated envelopes to local TutorHost |
 | `both` | Development only | Both surfaces; requires `developmentMode: true` |
 
-The Gateway invokes `desktop-tutor.host` only on the configured, manually approved node. The node handler forwards one validated newline-delimited JSON envelope to TutorHost's owner-only Unix socket. Until TutorHost is running it returns the typed result `TUTOR_HOST_UNAVAILABLE`.
+The Gateway invokes `desktop-tutor.host` on the node enrolled by the bundled
+private-Tailscale setup. The node handler forwards one validated
+newline-delimited JSON envelope to TutorHost's mode-`0600` Unix socket. Until
+TutorHost is running it returns the typed result `TUTOR_HOST_UNAVAILABLE`.
 
 Gateway configuration is additive:
 
@@ -23,17 +26,24 @@ Gateway configuration is additive:
         config: {
           role: "gateway",
           stateDirectory: "~/.openclaw/calla",
-          nodeId: "PAIRED_MAC_NODE_ID", // set only after manual approval
-          requireOwnerIdentity: true,
+          nodeId: "AUTO_ENROLLED_CALLA_MAC_NODE_ID",
+          requireOwnerIdentity: false,
         },
       },
     },
   },
-  gateway: { controlUi: { allowedOrigins: ["https://calla.nomonlab.com"] } },
+  gateway: {
+    mode: "local",
+    bind: "loopback",
+    auth: { mode: "none" },
+    tailscale: { mode: "off" },
+  },
 }
 ```
 
-Use `role: "node"` on the Mac. It must not register Gateway tools.
+`scripts/setup-calla-server.sh` adds the private Tailscale HTTPS proxy outside
+the Gateway, because the Gateway itself remains loopback-bound. Use
+`role: "node"` on the Mac. It must not register Gateway tools.
 
 ## Server-local App Pack retrieval
 
@@ -55,4 +65,6 @@ cd integrations/openclaw
 npm test
 ```
 
-The tests prove role isolation, server-local version-filtered retrieval, coordinate rejection, owner gating, one-shot approval, socket transport, and typed TutorHost unavailability.
+The tests prove role isolation, server-local version-filtered retrieval,
+coordinate rejection, local one-shot approval, socket transport, and typed
+TutorHost unavailability.

@@ -28,7 +28,7 @@ bridge_probe = load_script("blender_bridge_probe.py")
 
 
 class MacSetupToolTests(unittest.TestCase):
-    def test_server_setup_defaults_to_cf_dns_without_publication(self):
+    def test_server_setup_installs_the_private_tailscale_path(self):
         setup_script = REPOSITORY_ROOT / "scripts" / "setup-calla-server.sh"
         source = setup_script.read_text(encoding="utf-8")
         help_output = subprocess.run(
@@ -38,13 +38,15 @@ class MacSetupToolTests(unittest.TestCase):
             text=True,
         ).stdout
         self.assertIn("--install", help_output)
-        self.assertIn("cf-dns", help_output)
+        self.assertIn("Tailscale", help_output)
         self.assertIn('MODE="check"', source)
-        self.assertIn('"calla": "http://127.0.0.1:18789"', source)
-        self.assertIn('"node.calla": "tcp://127.0.0.1:18789"', source)
-        self.assertIn("No public CNAME was created", source)
+        self.assertIn("calla_openclaw_setup.py", source)
+        self.assertIn("pack-build", source)
+        self.assertIn("--openclaw-bin $openclaw_binary", source)
+        self.assertIn("WantedBy=default.target", source)
+        self.assertNotIn("cf-dns is required", source)
 
-    def test_macos_setup_default_node_option_sets_the_node_role(self):
+    def test_macos_setup_installs_the_single_private_node_without_credentials(self):
         setup_script = REPOSITORY_ROOT / "scripts" / "setup-macos.sh"
         bootstrap_script = REPOSITORY_ROOT / "scripts" / "bootstrap-calla-mac.sh"
         source = setup_script.read_text(encoding="utf-8")
@@ -56,10 +58,15 @@ class MacSetupToolTests(unittest.TestCase):
             text=True,
         ).stdout
         self.assertIn("--install-calla-node", help_output)
-        self.assertIn("bootstrap-calla-mac.sh\" --install --yes --transport tailscale", source)
-        self.assertIn('TRANSPORT="tailscale"', bootstrap_source)
+        self.assertIn("bootstrap-calla-mac.sh\" --install --yes", source)
+        self.assertNotIn("--transport", bootstrap_source)
+        self.assertNotIn("cloudflared", bootstrap_source)
         self.assertIn('"role":"node"', bootstrap_source)
         self.assertIn("calla-node-host.sh", bootstrap_source)
+        self.assertIn("calla-tutor-host.sh", bootstrap_source)
+        self.assertIn('"requireOwnerIdentity":false', bootstrap_source)
+        self.assertNotIn("OpenClaw Gateway token:", bootstrap_source)
+        self.assertIn("remove_legacy_auth_state", bootstrap_source)
         self.assertIn("--install-openclaw-plugin", source)
 
     def test_addon_zip_has_blender_package_layout(self):

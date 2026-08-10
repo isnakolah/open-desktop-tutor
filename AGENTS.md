@@ -7,21 +7,16 @@ Use the private Tailscale test path first. The default Mac command is:
 ```
 
 It connects only to the tailnet-only `nomonhomelab.tailec0dca.ts.net` Gateway
-endpoint. Do not publish Calla DNS, configure Cloudflare Access, or use the
-Cloudflare transport until Zero Trust Access is enabled and nested TLS covers
-`node.calla.nomonlab.com`.
+endpoint. Do not expose that endpoint outside the private tailnet.
 
-Keep the Gateway loopback-bound. Do not modify, adopt, or reuse
-`nomonlab-public`; Calla owns only `calla-control`. Never expose Keychain,
-OpenClaw, Cloudflare, bridge, or screenshot credentials in source, logs, or
-reports.
+Keep the Gateway loopback-bound. The private external Tailscale Serve proxy is
+the only Mac route. Never expose OpenClaw, bridge, or screenshot credentials
+in source, logs, or reports.
 
-Calla never writes a paired `nodeId` automatically. Do not bind a connected
-node without the exact identity supplied by the operator; use
-`calla_openclaw_setup.py --install --yes --node-id EXACT_APPROVED_NODE_ID`
-only after that review. This keeps Calla's tutor invocation surface manually
-bound even when an installed OpenClaw version has its own generic pairing flow.
+The private one-user setup runs `calla_node_enroller.py` on the Gateway. It
+enrolls only one pending node whose display name is exactly `Calla Mac`, then
+writes that node ID into Calla's plugin configuration. Do not broaden this
+matching rule or enable it on a shared tailnet.
 
 Before handing off code changes, run `make test`. For runtime work, distinguish
-private-Tailscale proof from Cloudflare production proof and from a real
-macOS TutorHost teaching round trip.
+private-Tailscale proof from a real macOS TutorHost teaching round trip.

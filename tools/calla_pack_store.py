@@ -82,10 +82,11 @@ def _atomic_write(path: Path, content: bytes, mode: int = 0o600) -> None:
 
 
 def install_pack(source: Path, state_directory: Path = DEFAULT_STATE_DIRECTORY) -> dict[str, Any]:
-    """Copy one validated compiled pack and write its JSON retrieval sidecar atomically."""
+    """Replace prior revisions of one pack and write its retrieval sidecar atomically."""
     pack, entities = load_compiled_pack(source)
     state_directory = state_directory.expanduser().resolve()
-    component = f"{_safe_component(pack['id'])}-{_safe_component(pack['pack_version'])}"
+    pack_component = _safe_component(pack["id"])
+    component = f"{pack_component}-{_safe_component(pack['pack_version'])}"
     pack_path = state_directory / "packs" / f"{component}.otpack"
     index_path = state_directory / "indexes" / f"{component}.json"
     index = {
@@ -96,6 +97,12 @@ def install_pack(source: Path, state_directory: Path = DEFAULT_STATE_DIRECTORY) 
     }
     _atomic_write(pack_path, source.read_bytes())
     _atomic_write(index_path, (json.dumps(index, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8"))
+    removed_revisions = 0
+    for directory, suffix, current in ((pack_path.parent, ".otpack", pack_path), (index_path.parent, ".json", index_path)):
+        for candidate in directory.glob(f"{pack_component}-*{suffix}"):
+            if candidate != current:
+                candidate.unlink()
+                removed_revisions += 1
     return {
         "ok": True,
         "pack_id": pack["id"],
@@ -103,6 +110,7 @@ def install_pack(source: Path, state_directory: Path = DEFAULT_STATE_DIRECTORY) 
         "entities": len(entities),
         "pack_path": str(pack_path),
         "index_path": str(index_path),
+        "removed_revisions": removed_revisions,
     }
 
 

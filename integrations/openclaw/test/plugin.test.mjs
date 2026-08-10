@@ -118,7 +118,7 @@ test("retrieve reads version-matched packs on the gateway and never invokes the 
       pack: {
         id: "org.open-desktop-tutor.blender",
         pack_version: "0.1.0",
-        apps: [{platform: "macos", bundle_ids: ["org.blenderfoundation.blender"], versions: ">=4.3 <4.6", locales: ["en"]}],
+        apps: [{platform: "macos", bundle_ids: ["org.blenderfoundation.blender"], versions: ">=5.2 <5.3", locales: ["en"]}],
       },
       entities: [{id: "blender.lesson.bevel_basics", kind: "lesson", title: "Bevel Basics", text: "Use the bevel modifier.", source_file: "lessons/bevel.yaml"}],
     }),
@@ -138,7 +138,7 @@ test("retrieve reads version-matched packs on the gateway and never invokes the 
     const result = await tool.execute("call-1", {
       session_id: "session-1234",
       query: "bevel modifier",
-      application: {bundle_id: "org.blenderfoundation.blender", version: "4.5", locale: "en"},
+      application: {bundle_id: "org.blenderfoundation.blender", version: "5.2.0", locale: "en"},
     });
     assert.equal(invokeCount, 0);
     assert.equal(result.details.source, "server-local");
@@ -172,8 +172,8 @@ test("protocol rejects coordinate-shaped authority", () => {
 });
 
 
-test("hook fails closed without owner identity and requires one-shot approval for actions", async () => {
-  const {api, registrations} = fakeApi();
+test("optional owner gate and one-shot action approval are independent", async () => {
+  const {api, registrations} = fakeApi({pluginConfig: {requireOwnerIdentity: true}});
   plugin.register(api);
   const hook = registrations.hooks.get("before_tool_call");
 
@@ -196,6 +196,14 @@ test("hook fails closed without owner identity and requires one-shot approval fo
   );
   assert.deepEqual(approval.requireApproval.allowedDecisions, ["allow-once", "deny"]);
   assert.equal(approval.requireApproval.severity, "warning");
+
+  const noOwnerGate = fakeApi({pluginConfig: {requireOwnerIdentity: false}});
+  plugin.register(noOwnerGate.api);
+  const unrestricted = await noOwnerGate.registrations.hooks.get("before_tool_call")(
+    {toolName: "tutor_observe", params: {session_id: "session-1234"}},
+    {requester: {senderIsOwner: false}},
+  );
+  assert.equal(unrestricted, undefined);
 });
 
 

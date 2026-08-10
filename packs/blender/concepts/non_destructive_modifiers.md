@@ -5,7 +5,7 @@ title: Non-destructive modifiers
 aliases:
   - modifier stack
   - procedural modeling
-app_versions: ">=4.3 <4.6"
+app_versions: ">=5.2 <5.3"
 source_refs:
   - blender-manual
 ---
