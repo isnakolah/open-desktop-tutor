@@ -560,31 +560,17 @@ final class CallaOverlay {
         // decision every 50ms, and since the frame is mid-animation it never
         // matched, so each tick started a fresh animation on top of the last
         // one. That is what the shaking was. One transition, one animation.
-        // Dodge away when the pointer arrives; come back only once the place it
-        // came from is clear.
+        // The tooltip does not move out of the way any more.
         //
-        // The obvious version oscillates: it steps aside, which means the
-        // pointer is no longer on it, which means it comes home — straight back
-        // under the pointer — and away again, forever. That was the shaking.
-        // Going home is therefore conditioned on home being empty, not on the
-        // tooltip's current position being empty.
-        guard let tooltip, narrating, let anchor = lastPoint else { return }
-        let home = tooltipFrame(for: anchor)
-        let move: CGRect?
-        if dodged {
-            move = home.insetBy(dx: -20, dy: -20).contains(pointer) ? nil : home
-        } else {
-            move = tooltip.frame.insetBy(dx: -14, dy: -14).contains(pointer)
-                ? tooltipFrame(for: anchor, avoiding: pointer)
-                : nil
-        }
-        guard let destination = move else { return }
-        dodged = destination != home
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            tooltip.animator().setFrame(destination, display: true)
-        }
+        // It was tried twice. Stepping to another corner put the words a long
+        // way from the arrow, because a box this wide is only ever adjacent to
+        // the arrow at one of its own corners — and losing which arrow the text
+        // belongs to is worse than the text being in the way. Collapsing it in
+        // place read as the tooltip disappearing. Both were worse than the
+        // problem they solved.
+        //
+        // So it stays put, tucked under the tip, and the learner answers it
+        // with ⌥⌘↩, ⌥⌘/ or ⌥⌘. without ever reaching for it.
     }
 
     private static func fade(from pointer: CGPoint, to rect: CGRect, begins: CGFloat) -> CGFloat {
