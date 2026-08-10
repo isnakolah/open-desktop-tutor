@@ -176,6 +176,8 @@ test("the teaching loop reaches the model as prompt guidance", () => {
   // A route the learner can see, and one the model is allowed to revise.
   assert.match(guidance, /call tutor_plan with the whole route/);
   assert.match(guidance, /what you expect, not a contract/);
+  assert.match(guidance, /corrects what is left, never what already happened/);
+  assert.match(guidance, /Pass step_index on every guide/);
   assert.match(guidance, /never try to force it/);
   for (const entry of teach.agentPromptGuidance) {
     assert.ok(entry.surfaces.length > 0, "guidance must not carry an empty surface list");

@@ -763,10 +763,19 @@ final class CallaOverlay {
         tooltip?.setFrameOrigin(tooltipFrame(for: point).origin)
     }
 
-    /// Take the route the model worked out up front.
+    /// Take the route the model worked out, keeping what the learner has done.
+    ///
+    /// A re-plan is a correction to what is left, not a rewrite of what
+    /// happened. Steps already completed stay exactly as they were and in the
+    /// order they were done, so the count never goes backwards and the learner
+    /// never sees a step they finished turn into a different one. The model can
+    /// add, drop or reword anything ahead of where they are.
     func setPlan(_ steps: [String], index: Int) {
-        plan = steps
-        planIndex = max(0, min(index, max(steps.count - 1, 0)))
+        let completed = Array(plan.prefix(planIndex))
+        let ahead = steps.filter { !completed.contains($0) }
+        plan = plan.isEmpty ? steps : completed + ahead
+        let wanted = index >= 0 ? index : planIndex
+        planIndex = max(completed.count, min(wanted, max(plan.count - 1, 0)))
         setThinking(thinking, step: currentStep, text: currentText)
         // The panel has to grow to hold the list; do it where the plan changes,
         // never on a timer, so no feedback loop can form.
@@ -785,8 +794,13 @@ final class CallaOverlay {
         return plan[planIndex + 1]
     }
 
+    /// Move the lesson to a planned step.
+    ///
+    /// A negative index means "no opinion" — the host sends that when a guide
+    /// carries no step_index, and clamping it to zero is what made the counter
+    /// snap back to Step 1 on every step that forgot to say where it was.
     func advancePlan(to index: Int?) {
-        guard let index, !plan.isEmpty else { return }
+        guard let index, index >= 0, !plan.isEmpty else { return }
         planIndex = max(0, min(index, plan.count - 1))
     }
 

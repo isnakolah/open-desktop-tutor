@@ -20,6 +20,12 @@ happens call tutor_plan again with a corrected list. Do not force a route that
 has stopped matching what you can see, and do not stop to re-plan when nothing
 has actually changed.
 
+Re-planning corrects what is left, never what already happened. Keep the steps
+the learner has already done, in the order they did them, and change only what
+lies ahead — adding steps you did not foresee is expected, renumbering their
+past is not. The Mac holds you to this: completed steps are preserved and the
+count cannot go backwards.
+
 Then, every step:
 1. tutor_observe with include_capture true, and allowed_bundle_ids naming the
    application you are teaching. You get one JPEG of the focused window. Read
@@ -27,7 +33,8 @@ Then, every step:
 2. tutor_guide with a region normalized to that window (left/top/width/height,
    each 0..1, measured off the image you just read) and one sentence of text.
    The learner sees Calla's cursor arrive there and the tooltip say your words.
-   Pass step_index so the list keeps up with where the lesson is.
+   Pass step_index on every guide, counting from zero. Without it the header
+   cannot tell which step the learner is on.
    Leave wait_for_change true, which is the default: guiding and then waiting
    are one thought, and a separate tutor_await_change costs an entire extra
    model round trip to say nothing but "now wait". The call returns the instant
