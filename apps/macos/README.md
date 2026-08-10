@@ -119,8 +119,14 @@ from Raycast tells the Mac before the request leaves, so the wait starts
 immediately instead of when the answer lands.
 
 **Only over the app being taught** in Options scopes the overlay to the taught
-window. Turn it off to keep the lesson on screen while working across two
-applications.
+window. It is off by default: scoping kept making lessons vanish while the
+learner was working, and a lesson you have to go looking for is worse than one
+that sits over a neighbouring window.
+
+A step ends when the learner says so — **Did it**, or `⌥⌘↩` — not when the
+pixels change. Calla then says it is checking, looks at the window, and either
+moves on or explains what is different and stays on the same step. Guessing from
+the screen hurried people, and a step that looks finished often is not.
 
 **Find it** in the menu bar pulses the pointer and tooltip where they already
 are, for a lesson lost on a large display.

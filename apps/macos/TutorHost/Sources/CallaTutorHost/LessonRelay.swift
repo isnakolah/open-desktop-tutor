@@ -12,11 +12,14 @@ final class LessonRelay {
     static let shared = LessonRelay()
 
     private var inFlight: Process?
+    private var checking = false
 
     func handle(event: String, text: String) {
         switch event {
         case "next":
-            send("I did that. Look at the window again and point me at the next step.")
+            checking = true
+            send("I have done that step. Check the window and tell me whether it worked — "
+                 + "if it did, point me at the next step; if it did not, say what is different.")
         case "ask":
             guard !text.isEmpty else { return }
             send(text)
@@ -41,8 +44,13 @@ final class LessonRelay {
         // would interleave two turns in the same lesson.
         if inFlight?.isRunning == true { return }
 
-        PointerOverlay.shared.narrate(step: "Calla", text: "Asking Calla…",
-                                      status: "Calla — thinking", thinking: true)
+        // Say which of the two it is. "Checking" and "asking" feel different to
+        // someone who has just finished a step and is waiting to hear.
+        PointerOverlay.shared.narrate(step: "Calla",
+                                      text: checking ? "Checking your work…" : "Asking Calla…",
+                                      status: checking ? "Calla — checking" : "Calla — thinking",
+                                      thinking: true)
+        checking = false
         let task = Process()
         task.executableURL = sender
         task.arguments = [message]

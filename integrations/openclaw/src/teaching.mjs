@@ -35,15 +35,14 @@ Then, every step:
    The learner sees Calla's cursor arrive there and the tooltip say your words.
    Pass step_index on every guide, counting from zero. Without it the header
    cannot tell which step the learner is on.
-   Leave wait_for_change true, which is the default: guiding and then waiting
-   are one thought, and a separate tutor_await_change costs an entire extra
-   model round trip to say nothing but "now wait". The call returns the instant
-   the learner acts.
-3. That same guide result comes back with next_observation: a fresh snapshot_id
-   and a new image of the window as it stands now that the learner has acted.
-   Use it. Guide the next step straight from it — do not call tutor_observe
-   again. Only observe when you have no fresh capture, which after the first
-   step means almost never.
+   Then end your turn. Do not wait, do not poll, do not guess from the pixels
+   whether they finished — the learner tells you when they are done, by pressing
+   Did it in the tooltip or ⌥⌘↩. Guessing hurries people, and a step that looks
+   finished often is not.
+3. When they say they are done you get a message saying so. Check before you
+   move on: observe, look at the image, and say whether it worked. If it did,
+   point at the next step. If it did not, say plainly what is different and
+   guide them again on the same step rather than advancing the count.
 
 Keep going until the goal is reached or the learner says stop. The window moves
 and the learner acts, so a region you measured two steps ago is a guess; the one

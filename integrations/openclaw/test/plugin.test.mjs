@@ -166,7 +166,8 @@ test("the teaching loop reaches the model as prompt guidance", () => {
   assert.match(guidance, /You cannot click/);
   // Without the wait the model points once and stops, which is what made a
   // lesson feel like a single instruction.
-  assert.match(guidance, /Leave wait_for_change true/);
+  assert.match(guidance, /the learner tells you when they are done/);
+  assert.match(guidance, /Check before you\s+move on/);
   // Asking the learner to narrate their own screen back is the slow path
   // this whole loop exists to avoid.
   assert.match(guidance, /Never end a turn by asking the learner to tell you when/);

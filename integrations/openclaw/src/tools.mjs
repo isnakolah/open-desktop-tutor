@@ -146,8 +146,8 @@ const definitions = {
         step_index: {type: "integer", minimum: 0, description: "Which planned step this is, so the list keeps up."},
         wait_for_change: {
           type: "boolean",
-          default: true,
-          description: "Point and then wait for the learner in one call. Leave true: a separate tutor_await_change costs a whole extra round trip.",
+          default: false,
+          description: "Watch for the screen to change instead of waiting to be told. Off by default: the learner says when they are done, which is more reliable than guessing from pixels and does not hurry them.",
         },
         timeout_seconds: {type: "number", minimum: 1, maximum: 25, default: 15},
         capture_after_change: {
