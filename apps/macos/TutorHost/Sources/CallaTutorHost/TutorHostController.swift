@@ -139,7 +139,7 @@ final class TutorHostController: ObservableObject {
             let payload: [String: JSONValue]
             switch request.operation {
             case "observe": payload = try await engine.observe(request.payload)
-            case "guide": payload = try engine.guide(request.payload)
+            case "guide": payload = try await engine.guide(request.payload)
             case "await_change": payload = try await engine.awaitChange(request.payload)
             case "narrate": payload = engine.narrate(request.payload)
             case "point": payload = try engine.point(request.payload)
@@ -280,7 +280,22 @@ private final class AccessibilityTutorEngine {
     /// still owns everything that matters: it re-finds the window itself, maps
     /// the region against the window's *current* geometry, and draws. Nothing
     /// here can click, and no screen coordinate goes back over the wire.
-    func guide(_ payload: [String: JSONValue]) throws -> [String: JSONValue] {
+    func guide(_ payload: [String: JSONValue]) async throws -> [String: JSONValue] {
+        var result = try drawGuide(payload)
+        // Pointing and then waiting are one thought, and splitting them costs a
+        // whole model round trip — about eight seconds here — to say nothing
+        // more than "now wait". Doing both in one call is most of the
+        // difference between a lesson that keeps up and one that does not.
+        if payload["wait_for_change"]?.boolValue == true {
+            let waited = try await awaitChange(payload)
+            for (key, value) in waited where key != "status" && key != "snapshot_id" {
+                result[key] = value
+            }
+        }
+        return result
+    }
+
+    private func drawGuide(_ payload: [String: JSONValue]) throws -> [String: JSONValue] {
         guard let region = try normalizedRegion(payload["region"]) else {
             throw TutorHostFailure(code: "missing_region", message: "guide requires one normalized region of the observed window")
         }

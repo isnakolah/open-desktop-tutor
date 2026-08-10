@@ -150,10 +150,12 @@ test("the teaching loop reaches the model as prompt guidance", () => {
   assert.match(guidance, /You cannot click/);
   // Without the wait the model points once and stops, which is what made a
   // lesson feel like a single instruction.
-  assert.match(guidance, /tutor_await_change, immediately, in the same turn/);
+  assert.match(guidance, /Leave wait_for_change true/);
   // Asking the learner to narrate their own screen back is the slow path
   // this whole loop exists to avoid.
   assert.match(guidance, /Never end a turn by asking the learner to tell you when/);
+  // Every extra tool call is a round trip the learner sits through.
+  assert.match(guidance, /two calls a step — observe, guide — is the budget/);
   assert.match(guidance, /never try to force it/);
   for (const entry of teach.agentPromptGuidance) {
     assert.ok(entry.surfaces.length > 0, "guidance must not carry an empty surface list");

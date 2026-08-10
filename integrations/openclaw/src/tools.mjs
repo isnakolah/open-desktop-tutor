@@ -88,6 +88,12 @@ const definitions = {
         step: {type: "string", maxLength: 60, description: "Short progress label, for example \"Step 2 of 4\"."},
         text: {type: "string", minLength: 1, maxLength: 240, description: "One instruction, in the learner's words."},
         status: {type: "string", maxLength: 80},
+        wait_for_change: {
+          type: "boolean",
+          default: true,
+          description: "Point and then wait for the learner in one call. Leave true: a separate tutor_await_change costs a whole extra round trip.",
+        },
+        timeout_seconds: {type: "number", minimum: 1, maximum: 25, default: 15},
       },
     },
   },
