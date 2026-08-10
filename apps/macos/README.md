@@ -91,7 +91,21 @@ They do not disappear when you look elsewhere. A lesson that vanished every time
 the learner checked something had to be found again, so the step stays on screen
 until the lesson ends or teaching is switched off in the menu bar.
 
-The pointer never fades; it is the thing being followed. The tooltip steps aside
-instead: when your own pointer reaches it, it moves to whichever corner of the
-cursor is furthest from your hand, because half-transparent text over a busy
-interface is worse than either being there or not.
+The pointer never fades or moves out of the way; it is the thing being followed,
+and it marks the spot even when the words are gone. The tooltip hides completely
+while your own pointer is over it, and returns the moment you move away.
+
+Three other answers were tried and are worse. Fading it leaves half-transparent
+text over a busy interface, which is harder to read than either state and still
+occludes. Stepping to another corner detaches the words from the arrow, because
+a box this wide is only ever adjacent to the arrow at one of its own corners.
+Collapsing it in place read as the tooltip vanishing anyway.
+
+The hover test is made against the tooltip's anchor, never its live frame. That
+distinction is what keeps the behaviour from chasing itself: earlier versions
+tested against something the behaviour changed, so acting on the answer changed
+the answer, and the tooltip shook or ping-ponged. Hiding moves and resizes
+nothing, so it cannot recur.
+
+**Find it** in the menu bar pulses the pointer and tooltip where they already
+are, for a lesson lost on a large display.

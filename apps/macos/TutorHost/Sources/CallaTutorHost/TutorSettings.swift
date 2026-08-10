@@ -18,9 +18,10 @@ final class TutorSettings: ObservableObject {
         didSet { defaults.set(allowedBundleIDs, forKey: Key.allowedBundleIDs) }
     }
 
-    /// Fade Calla's pointer as the learner's own pointer approaches it.
-    @Published var dimNearPointer: Bool {
-        didSet { defaults.set(dimNearPointer, forKey: Key.dimNearPointer) }
+    /// Hide the tooltip while the learner's own pointer is over it, so it stops
+    /// covering what is underneath. The pointer itself never hides.
+    @Published var hideTooltipOnHover: Bool {
+        didSet { defaults.set(hideTooltipOnHover, forKey: Key.hideTooltipOnHover) }
     }
 
     // Scoping the overlay to the application being taught is deliberately not a
@@ -63,7 +64,7 @@ final class TutorSettings: ObservableObject {
 
     private enum Key {
         static let allowedBundleIDs = "allowedBundleIDs"
-        static let dimNearPointer = "dimNearPointer"
+        static let hideTooltipOnHover = "hideTooltipOnHover"
         static let captureLongEdge = "captureLongEdge"
         static let cursorSize = "cursorSize"
         static let showStatusHUD = "showStatusHUD"
@@ -77,7 +78,7 @@ final class TutorSettings: ObservableObject {
         // `object(forKey:)` rather than `bool(forKey:)`: an absent preference
         // must mean the shipped default, and bool(forKey:) cannot tell absent
         // from false.
-        dimNearPointer = defaults.object(forKey: Key.dimNearPointer) as? Bool ?? true
+        hideTooltipOnHover = defaults.object(forKey: Key.hideTooltipOnHover) as? Bool ?? true
         let edge = defaults.object(forKey: Key.captureLongEdge) as? Int ?? 1600
         captureLongEdge = Self.captureLongEdgeChoices.contains(edge) ? edge : 1600
         let size = defaults.object(forKey: Key.cursorSize) as? Int ?? 30
@@ -89,7 +90,7 @@ final class TutorSettings: ObservableObject {
     /// Put every choice back to the shipped default, including the allowlist.
     func resetToDefaults() {
         allowedBundleIDs = Self.defaultAllowedBundleIDs
-        dimNearPointer = true
+        hideTooltipOnHover = true
         captureLongEdge = 1600
         cursorSize = 30
         showStatusHUD = true

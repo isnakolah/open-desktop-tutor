@@ -1029,7 +1029,7 @@ final class PointerOverlay {
               "window": ["x": window.minX, "y": window.minY,
                          "width": window.width, "height": window.height],
               "owner": owner,
-              "dim": TutorSettings.shared.dimNearPointer,
+              "hide_on_hover": TutorSettings.shared.hideTooltipOnHover,
               "cursor_size": TutorSettings.shared.cursorSize,
               "show_hud": TutorSettings.shared.showStatusHUD,
               "step": step, "text": text, "status": status])
@@ -1039,6 +1039,12 @@ final class PointerOverlay {
     /// it, so a lesson can narrate several beats about one control.
     func narrate(step: String, text: String, status: String, thinking: Bool) {
         send(["cmd": "narrate", "step": step, "text": text, "status": status, "thinking": thinking])
+    }
+
+    /// Pulse the pointer and tooltip where they already are, for a learner who
+    /// has lost track of them on a large display.
+    func locate() {
+        send(["cmd": "locate"])
     }
 
     func hide() {

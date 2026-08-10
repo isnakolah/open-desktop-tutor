@@ -17,6 +17,7 @@ import SwiftUI
 //   {"cmd":"point","x":123,"y":456,"window":{"x":0,"y":0,"width":1,"height":1},
 //    "owner":"com.example.app","step":"Step 1 of 2","text":"...","status":"..."}
 //   {"cmd":"narrate","step":"Step 1 of 2","text":"...","status":"...","thinking":true}
+//   {"cmd":"locate"}
 //   {"cmd":"hide"}
 //   {"cmd":"quit"}
 // Coordinates are screen points with a top-left origin, matching what the host
@@ -225,8 +226,8 @@ struct CallaTooltip: View {
     }
 
     /// The shortcut rides on the button, because a shortcut nobody can see is a
-    /// shortcut nobody uses — and the tooltip moves away from the pointer, so
-    /// the keyboard is the better way to answer it anyway.
+    /// shortcut nobody uses — and the tooltip hides while the pointer is over
+    /// it, so the keyboard is the only way to answer it without looking away.
     private func pill(_ title: String, _ shortcut: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 5) {
@@ -302,16 +303,13 @@ final class CallaOverlay {
     private var narrating = false
     private var ownerIsFrontmost = true
 
-    /// How opaque the pointer should be given where the learner's own pointer
-    /// is. Panels already ignore mouse events, so Calla never steals a click —
-    /// this is about not covering what the learner is trying to look at.
-    private var proximityAlpha: CGFloat = 1
-    private var tooltipAlpha: CGFloat = 1
-    /// Where the current step put the cursor, so the tooltip can be re-placed
-    /// around it without moving the pointer.
+    /// Where the current step put the cursor. Every decision about the tooltip
+    /// is made against this anchor rather than against the panel's live frame,
+    /// which is the rule that keeps the behaviour from chasing itself.
     private var lastPoint: CGPoint?
+    /// True while the learner's own pointer is over where the tooltip sits.
+    private var pointerIsOver = false
     private var askingRequested = 0
-    private var dodged = false
     private var currentStep = ""
     private var currentText = ""
     /// Tall enough for two lines and the control row beneath them.
@@ -327,11 +325,8 @@ final class CallaOverlay {
         fflush(stdout)
     }
     private var pointerWatch: Timer?
-    private var dimNearPointer = true
+    private var hideOnHover = true
     private var hudEnabled = true
-    /// Distance from Calla's pointer at which fading starts and bottoms out.
-    private static let fadeBegins: CGFloat = 90
-    private static let fadeFloor: CGFloat = 0.35
 
     /// The size the artwork is currently drawn at, inside a panel that is
     /// always `CallaCursor.maxSize` square.
@@ -431,9 +426,8 @@ final class CallaOverlay {
         setThinking(false, step: step, text: text)
         self.status(status)
         narrating = true
+        pointerIsOver = false
         Shortcuts.shared.claim()
-        tooltipAlpha = 1
-        proximityAlpha = 1
         show()
     }
 
@@ -477,7 +471,11 @@ final class CallaOverlay {
     /// the taught window; visibility is not.
     private func applyVisibility() {
         cursor?.alphaValue = 1
-        tooltip?.alphaValue = narrating ? 1 : 0
+        // The tooltip is the only thing that gets out of the way, and it does it
+        // by disappearing rather than moving or fading: moving detached the
+        // words from the arrow they belong to, and half-transparent text over a
+        // busy interface is harder to read than either state.
+        tooltip?.alphaValue = narrating && !(hideOnHover && pointerIsOver) ? 1 : 0
         hud?.alphaValue = narrating && hudEnabled ? 1 : 0
         for panel in [cursor, tooltip, hud] { panel?.orderFrontRegardless() }
     }
@@ -510,6 +508,40 @@ final class CallaOverlay {
         }
     }
 
+    /// Say where the lesson is, when the learner has lost it.
+    ///
+    /// A pointer thirty points wide on a large display is easy to miss, and the
+    /// tooltip hides itself whenever the learner's own pointer is over it. This
+    /// pulses both, in place, without moving the step or disturbing anything.
+    func locate() {
+        guard let anchor = lastPoint else { return }
+        pointerIsOver = false
+        applyVisibility()
+        for panel in [cursor, tooltip] { panel?.orderFrontRegardless() }
+        // Two quick dips in opacity read as "over here" without the overlay
+        // jumping around, which would undo the point of pinning it to the step.
+        let pulses = 2
+        for pulse in 0..<pulses {
+            let base = Double(pulse) * 0.34
+            DispatchQueue.main.asyncAfter(deadline: .now() + base) {
+                MainActor.assumeIsolated { CallaOverlay.shared.flash(to: 0.25) }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + base + 0.17) {
+                MainActor.assumeIsolated { CallaOverlay.shared.flash(to: 1) }
+            }
+        }
+        status("Calla — here")
+        _ = anchor
+    }
+
+    private func flash(to alpha: CGFloat) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.16
+            cursor?.animator().alphaValue = alpha
+            if narrating { tooltip?.animator().alphaValue = alpha }
+        }
+    }
+
     /// Open the tooltip's question field from a shortcut.
     func beginAsking() {
         guard narrating else { return }
@@ -524,62 +556,40 @@ final class CallaOverlay {
         tooltip?.makeKeyAndOrderFront(nil)
     }
 
-    func setDimNearPointer(_ value: Bool) {
-        guard dimNearPointer != value else { return }
-        dimNearPointer = value
-        if !value, proximityAlpha != 1 {
-            proximityAlpha = 1
-            applyVisibility()
-        }
+    func setHideOnHover(_ value: Bool) {
+        guard hideOnHover != value else { return }
+        hideOnHover = value
+        // Switching it off must reveal the tooltip immediately, not at the next
+        // time the pointer happens to move.
+        if !value { pointerIsOver = false }
+        applyVisibility()
     }
 
     func updateProximity() {
         // Re-check who is in front here rather than trusting the activation
         // notification alone. A lesson is normally asked for from somewhere
         // else — Raycast, a chat window — so the first guide lands while the
-        // taught application is behind, and the overlay is hidden until the
-        // learner switches back. If that one notification is missed, it stays
-        // hidden forever and the lesson looks like it never started. Polling
-        // what is already a running timer costs nothing and cannot miss.
+        // taught application is behind. If that one notification is missed the
+        // overlay would never come back. Polling a timer that already runs
+        // costs nothing and cannot miss.
         frontmostApplicationChanged(to: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
 
-        guard dimNearPointer else { return }
-        let pointer = NSEvent.mouseLocation
-
-        // The pointer never fades. It is the one thing the learner is meant to
-        // be following, and a pointer that dims as you look toward it is a
-        // pointer that disappears exactly when it is being used.
-
-        // The tooltip moves instead of fading. Words you can seSe through are
-        // still in the way, and half-transparent text over a busy interface is
-        // worse than either. When the learner's pointer reaches it, it steps to
-        // whichever corner of the cursor is furthest from their hand.
-        // Move only when the answer changes — the pointer arrives, or leaves.
+        // Hide the tooltip while the learner's pointer is over it.
         //
-        // Comparing against the tooltip's current frame instead meant a
-        // decision every 50ms, and since the frame is mid-animation it never
-        // matched, so each tick started a fresh animation on top of the last
-        // one. That is what the shaking was. One transition, one animation.
-        // The tooltip does not move out of the way any more.
-        //
-        // It was tried twice. Stepping to another corner put the words a long
-        // way from the arrow, because a box this wide is only ever adjacent to
-        // the arrow at one of its own corners — and losing which arrow the text
-        // belongs to is worse than the text being in the way. Collapsing it in
-        // place read as the tooltip disappearing. Both were worse than the
-        // problem they solved.
-        //
-        // So it stays put, tucked under the tip, and the learner answers it
-        // with ⌥⌘↩, ⌥⌘/ or ⌥⌘. without ever reaching for it.
-    }
-
-    private static func fade(from pointer: CGPoint, to rect: CGRect, begins: CGFloat) -> CGFloat {
-        // Distance from the pointer to the rect, zero inside it.
-        let dx = max(rect.minX - pointer.x, 0, pointer.x - rect.maxX)
-        let dy = max(rect.minY - pointer.y, 0, pointer.y - rect.maxY)
-        let distance = (dx * dx + dy * dy).squareRoot()
-        let nearness = max(0, min(1, 1 - distance / begins))
-        return 1 - nearness * (1 - fadeFloor)
+        // The test is against the anchor's rect, never the panel's live frame.
+        // That is the whole trick. Every earlier version tested against
+        // something the behaviour itself changed — a frame mid-animation, or a
+        // position that had just dodged — so acting on the answer changed the
+        // answer, and it shook or ping-ponged. Hiding moves nothing and resizes
+        // nothing, so this test cannot be disturbed by its own result.
+        guard hideOnHover, narrating, let anchor = lastPoint else { return }
+        let over = tooltipFrame(for: anchor).insetBy(dx: -8, dy: -8).contains(NSEvent.mouseLocation)
+        guard over != pointerIsOver else { return }
+        pointerIsOver = over
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            tooltip?.animator().alphaValue = over ? 0 : 1
+        }
     }
 
     /// Place the tooltip beside the cursor, inside the taught window, on
@@ -635,26 +645,19 @@ final class CallaOverlay {
         tooltipSlots(for: point)[0]
     }
 
-    private func tooltipFrame(for point: CGPoint, avoiding pointer: CGPoint) -> CGRect {
-        tooltipSlots(for: point).max { left, right in
-            Self.distance(from: pointer, to: left) < Self.distance(from: pointer, to: right)
-        } ?? tooltipFrame(for: point)
-    }
-
-    private static func distance(from pointer: CGPoint, to rect: CGRect) -> CGFloat {
-        let dx = max(rect.minX - pointer.x, 0, pointer.x - rect.maxX)
-        let dy = max(rect.minY - pointer.y, 0, pointer.y - rect.maxY)
-        return (dx * dx + dy * dy).squareRoot()
-    }
 
     /// Slide the pointer and its words to the next step together.
     func glide(from: CGPoint, to rawPoint: CGPoint, duration: TimeInterval) {
         let point = clamped(rawPoint)
         lastPoint = point
-        dodged = false
+        // Clearing the flag is not enough on its own: the alpha is where the
+        // last hide left it, so a step that began while the learner's pointer
+        // happened to be over the old position would arrive invisible.
+        pointerIsOver = false
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            if narrating { tooltip?.animator().alphaValue = 1 }
             // setFrame, not setFrameOrigin: the animator proxy ignores
             // setFrameOrigin on a window, so animating that way moved the
             // tooltip and left the pointer standing where it was.
@@ -807,7 +810,7 @@ struct Command: Decodable {
     let y: Double?
     let window: WindowRect?
     let owner: String?
-    let dim: Bool?
+    let hide_on_hover: Bool?
     let cursor_size: Int?
     let show_hud: Bool?
     let step: String?
@@ -929,7 +932,7 @@ Thread.detachNewThread {
                 switch command.cmd {
                 case "point":
                     guard let x = command.x, let y = command.y else { return }
-                    CallaOverlay.shared.setDimNearPointer(command.dim ?? true)
+                    CallaOverlay.shared.setHideOnHover(command.hide_on_hover ?? true)
                     CallaOverlay.shared.apply(cursorSize: command.cursor_size.map(CGFloat.init),
                                               showHUD: command.show_hud)
                     CallaOverlay.shared.adopt(owner: command.owner, window: command.window.map(cocoa))
@@ -937,6 +940,8 @@ Thread.detachNewThread {
                                         step: command.step ?? "Calla",
                                         text: command.text ?? "",
                                         status: command.status ?? "Calla")
+                case "locate":
+                    CallaOverlay.shared.locate()
                 case "narrate":
                     Runner.shared.narrate(step: command.step, text: command.text,
                                           status: command.status, thinking: command.thinking ?? false)

@@ -77,6 +77,11 @@ struct CallaMenu: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
+            if case .ready = readiness {
+                Button("Find it") { PointerOverlay.shared.locate() }
+                    .controlSize(.small)
+                    .help("Flash Calla's pointer and tooltip where they are")
+            }
             Circle().fill(statusTint).frame(width: 7, height: 7)
         }
         .padding(.horizontal, 14)
@@ -237,7 +242,7 @@ struct CallaMenu: View {
                     }
                     .pickerStyle(.segmented).labelsHidden()
                 }
-                Toggle("Fade near my pointer", isOn: $settings.dimNearPointer)
+                Toggle("Hide the tooltip when I hover it", isOn: $settings.hideTooltipOnHover)
                     .font(.system(size: 12))
                 Toggle("Status capsule", isOn: $settings.showStatusHUD)
                     .font(.system(size: 12))
