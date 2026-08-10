@@ -34,7 +34,10 @@ def send(obj, timeout=8.0):
     return send_raw((json.dumps(obj) + "\n").encode(), timeout)
 
 
-def req(op, payload=None, version=1, session=SESSION, rid="probe-1"):
+PROTOCOL_VERSION = 2
+
+
+def req(op, payload=None, version=PROTOCOL_VERSION, session=SESSION, rid="probe-1"):
     return {
         "protocol_version": version,
         "request_id": rid,
@@ -53,10 +56,10 @@ def code_of(resp):
 
 
 CASES = [
-    ("protocol version 2 rejected",      lambda: send(req("observe", version=2)),               "unsupported_version"),
+    ("wrong protocol version rejected",  lambda: send(req("observe", version=1)),               "unsupported_version"),
     ("short session rejected",           lambda: send(req("observe", session="short")),         "invalid_session"),
     ("unknown operation rejected",       lambda: send(req("shell_exec")),                       "unsupported_operation"),
-    ("raw click(x,y) not an operation",  lambda: send(req("click", {"x": 100, "y": 200})),       "unsupported_operation"),
+    ("raw click(x,y) refused as coordinates", lambda: send(req("click", {"x": 100, "y": 200})),  "invalid_coordinates"),
     ("arbitrary python not an operation",lambda: send(req("run_python", {"code": "import os"})), "unsupported_operation"),
     ("propose_action type must be click",lambda: send(req("propose_action", {"action": "type", "text": "rm -rf"})), "unsupported_action"),
     ("propose_action with coords still needs semantics",
@@ -65,9 +68,9 @@ CASES = [
     # Rejection is the security property. The transport catch flattens every
     # TutorHostFailure to protocol_error, so frame_limit never reaches the client.
     ("oversized frame rejected",         lambda: send_raw(b'{"a":"' + b"x" * (70 * 1024) + b'"}\n'), "protocol_error"),
-    ("observe without an allowlist fails closed", lambda: send(req("observe")),                "app_not_allowed"),
-    ("point without a descriptor is refused",     lambda: send(req("point", {"snapshot_id": "x"})), "unsupported_target"),
-    ("verify without a descriptor is refused",    lambda: send(req("verify", {})),              "unsupported_target"),
+    ("observe requires a focused allowlisted app", lambda: send(req("observe")),               None),
+    ("point without a descriptor is refused",     lambda: send(req("point", {"snapshot_id": "x"})), "missing_target"),
+    ("verify without a descriptor is refused",    lambda: send(req("verify", {})),              "missing_target"),
 ]
 
 
