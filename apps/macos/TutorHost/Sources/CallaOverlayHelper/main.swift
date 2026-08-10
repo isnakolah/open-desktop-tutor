@@ -304,7 +304,7 @@ final class CallaOverlay {
     private var hudEnabled = true
     /// Distance from Calla's pointer at which fading starts and bottoms out.
     private static let fadeBegins: CGFloat = 90
-    private static let fadeFloor: CGFloat = 0.12
+    private static let fadeFloor: CGFloat = 0.35
 
     /// The size the artwork is currently drawn at, inside a panel that is
     /// always `CallaCursor.maxSize` square.
@@ -488,6 +488,15 @@ final class CallaOverlay {
     }
 
     func updateProximity() {
+        // Re-check who is in front here rather than trusting the activation
+        // notification alone. A lesson is normally asked for from somewhere
+        // else — Raycast, a chat window — so the first guide lands while the
+        // taught application is behind, and the overlay is hidden until the
+        // learner switches back. If that one notification is missed, it stays
+        // hidden forever and the lesson looks like it never started. Polling
+        // what is already a running timer costs nothing and cannot miss.
+        frontmostApplicationChanged(to: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+
         guard dimNearPointer, ownerIsFrontmost else { return }
         let pointer = NSEvent.mouseLocation
 
