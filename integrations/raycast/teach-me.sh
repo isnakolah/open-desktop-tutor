@@ -1,17 +1,17 @@
 #!/bin/bash
 #
-# Ask Calla to teach you whatever is on screen, without leaving it.
+# Ask Calla anything about the app you are using, without leaving it.
 #
-# Raycast overlays the application you are using and hands focus back when it
-# closes, so by the time the lesson starts you are already looking at the thing
-# being taught. The Mac host remembers the allowlisted application you were last
-# in, so the request lands on that one rather than on Raycast.
+# Raycast overlays the application you are in and hands focus straight back when
+# it closes, so by the time the lesson starts you are already looking at the
+# thing being taught. The Mac host resolves the allowlisted application you were
+# last in, so the lesson lands there rather than on Raycast.
 #
-# The turn runs on the Gateway. Nothing here runs a model locally: this Mac has
-# no provider credentials and is not supposed to have any.
+# The turn runs on the Gateway. This Mac has no provider credentials and is not
+# meant to have any, so nothing here can quietly think locally.
 #
-# Install: Raycast > Extensions > Script Commands > Add Directories,
-# then pick integrations/raycast in this checkout.
+# Every question continues the same lesson, so "what about the other one?" and
+# "I did that" both work. To start fresh, just say so in the question.
 #
 # Required parameters:
 # @raycast.schemaVersion 1
@@ -28,46 +28,13 @@
 # @raycast.author Calla
 
 set -uo pipefail
+source "$(dirname "$0")/_calla-send.sh"
 
 GOAL="${1:-}"
-GATEWAY_HOST="${CALLA_GATEWAY_SSH:-isnakolah@nomonhomelab}"
-# Short path: a control socket lives under a 104-byte limit, and the session
-# directory names blow past it.
-CONTROL="/tmp/calla-raycast.sock"
-SESSION="calla-raycast"
-
 if [[ -z "${GOAL// }" ]]; then
   echo "Say what you want to learn, for example: how do I bevel a cube"
   exit 1
 fi
 
-# Reuse one authenticated connection. Tailscale SSH mints a browser check per
-# new connection, so a persistent master is what keeps this from prompting on
-# every invocation.
-SSH_OPTIONS=(
-  -o BatchMode=yes
-  -o ConnectTimeout=8
-  -o ControlMaster=auto
-  -o "ControlPath=$CONTROL"
-  -o ControlPersist=8h
-)
-
-# Escape the goal for the remote shell rather than interpolating it raw.
-QUOTED_GOAL=$(printf '%s' "$GOAL" | sed "s/'/'\\\\''/g")
-
-REMOTE="export PATH=\$HOME/.npm-global/bin:\$PATH;
-nohup openclaw agent --session-id $SESSION -m '/teach $QUOTED_GOAL' \
-  > /tmp/calla-raycast-last.json 2>&1 &
-echo started"
-
-if ! OUTPUT=$(ssh "${SSH_OPTIONS[@]}" "$GATEWAY_HOST" "$REMOTE" 2>&1); then
-  if [[ "$OUTPUT" == *"login.tailscale.com"* ]]; then
-    URL=$(printf '%s' "$OUTPUT" | grep -o 'https://login.tailscale.com/[^ ]*' | head -1)
-    echo "Tailscale needs one approval: $URL"
-    exit 1
-  fi
-  echo "Could not reach Calla's Gateway: ${OUTPUT##*$'\n'}"
-  exit 1
-fi
-
-echo "Calla is looking at your screen — switch back to the app you want taught."
+calla_send "/teach $GOAL" || exit 1
+echo "Calla is looking — switch back to the app you want taught."

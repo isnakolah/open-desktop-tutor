@@ -227,6 +227,7 @@ final class CallaOverlay {
     /// is. Panels already ignore mouse events, so Calla never steals a click —
     /// this is about not covering what the learner is trying to look at.
     private var proximityAlpha: CGFloat = 1
+    private var tooltipAlpha: CGFloat = 1
     private var pointerWatch: Timer?
     private var dimNearPointer = true
     private var hudEnabled = true
@@ -318,6 +319,8 @@ final class CallaOverlay {
         setThinking(false, step: step, text: text)
         self.status(status)
         narrating = true
+        tooltipAlpha = 1
+        proximityAlpha = 1
         show()
     }
 
@@ -357,7 +360,7 @@ final class CallaOverlay {
     private func applyVisibility() {
         let visible = ownerIsFrontmost
         cursor?.alphaValue = visible ? proximityAlpha : 0
-        tooltip?.alphaValue = visible && narrating ? 1 : 0
+        tooltip?.alphaValue = visible && narrating ? tooltipAlpha : 0
         hud?.alphaValue = visible && narrating && hudEnabled ? 1 : 0
         guard visible else { return }
         for panel in [cursor, tooltip, hud] { panel?.orderFrontRegardless() }
@@ -401,26 +404,48 @@ final class CallaOverlay {
     }
 
     func updateProximity() {
-        guard dimNearPointer, ownerIsFrontmost, let cursor else { return }
+        guard dimNearPointer, ownerIsFrontmost else { return }
         let pointer = NSEvent.mouseLocation
-        let rect = cursor.frame
-        // Distance from the point to the pointer's own rect, zero inside it.
+
+        if let cursor {
+            let target = Self.fade(from: pointer, to: cursor.frame, begins: Self.fadeBegins)
+            if abs(target - proximityAlpha) > 0.01 {
+                proximityAlpha = target
+                cursor.alphaValue = target
+            }
+        }
+        // The tooltip is the bigger obstruction, and the learner reaching toward
+        // whatever is under it is exactly the moment to get out of the way. It
+        // fades on contact rather than on approach, so reading it does not
+        // require holding the pointer still somewhere else.
+        if let tooltip, narrating {
+            let target = Self.fade(from: pointer, to: tooltip.frame, begins: 24)
+            if abs(target - tooltipAlpha) > 0.01 {
+                tooltipAlpha = target
+                tooltip.alphaValue = target
+            }
+        }
+    }
+
+    private static func fade(from pointer: CGPoint, to rect: CGRect, begins: CGFloat) -> CGFloat {
+        // Distance from the pointer to the rect, zero inside it.
         let dx = max(rect.minX - pointer.x, 0, pointer.x - rect.maxX)
         let dy = max(rect.minY - pointer.y, 0, pointer.y - rect.maxY)
         let distance = (dx * dx + dy * dy).squareRoot()
-        let nearness = max(0, min(1, 1 - distance / Self.fadeBegins))
-        let target = 1 - nearness * (1 - Self.fadeFloor)
-        guard abs(target - proximityAlpha) > 0.01 else { return }
-        proximityAlpha = target
-        cursor.alphaValue = target
+        let nearness = max(0, min(1, 1 - distance / begins))
+        return 1 - nearness * (1 - fadeFloor)
     }
 
-    /// Place the tooltip beside the cursor and inside the taught window.
+    /// Place the tooltip beside the cursor, inside the taught window, on
+    /// whichever side of it has more room.
     ///
-    /// Bounding it by the window rather than the display is what keeps the
-    /// narration on the program being taught instead of spilling onto the
-    /// desktop or a neighbouring application. A window narrower than the
-    /// tooltip would leave nowhere legal to sit, so fall back to the display.
+    /// Bounding it by the window rather than the display keeps the narration on
+    /// the program being taught instead of spilling onto the desktop. Choosing
+    /// the side by where the cursor sits is what stops it from parking on top of
+    /// the thing it is describing: pointing at something near the top of the
+    /// window pushes the words down, pointing near the bottom pushes them up,
+    /// and the same for left and right. A window too small to hold it leaves
+    /// nowhere legal to sit, so fall back to the display.
     private func tooltipFrame(for point: CGPoint) -> CGRect {
         let size = CGSize(width: 300, height: 100)
         let display = (NSScreen.screens.first { $0.frame.contains(point) } ?? NSScreen.main!).frame
@@ -428,10 +453,21 @@ final class CallaOverlay {
         if let window, window.width >= size.width + 20, window.height >= size.height + 20 {
             bounds = window
         }
-        var x = point.x + 28
-        if x + size.width > bounds.maxX - 10 { x = point.x - 28 - size.width }
+        let gap: CGFloat = 26
+        // Cocoa's y grows upward, so a cursor high on screen has a large y and
+        // wants its words below it, at a smaller y.
+        let cursorIsHigh = point.y > bounds.midY
+        let cursorIsLeft = point.x < bounds.midX
+
+        var x = cursorIsLeft ? point.x + gap : point.x - gap - size.width
+        var y = cursorIsHigh ? point.y - gap - size.height : point.y + gap
+        // Whichever side was chosen, it still has to fit; flip back if not.
+        if x < bounds.minX + 10 { x = point.x + gap }
+        if x + size.width > bounds.maxX - 10 { x = point.x - gap - size.width }
+        if y < bounds.minY + 10 { y = point.y + gap }
+        if y + size.height > bounds.maxY - 10 { y = point.y - gap - size.height }
         x = min(max(x, bounds.minX + 10), bounds.maxX - size.width - 10)
-        let y = min(max(point.y - size.height - 4, bounds.minY + 10), bounds.maxY - size.height - 10)
+        y = min(max(y, bounds.minY + 10), bounds.maxY - size.height - 10)
         return CGRect(origin: CGPoint(x: x, y: y), size: size)
     }
 
