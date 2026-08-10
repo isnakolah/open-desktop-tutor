@@ -10,9 +10,10 @@ import ScreenCaptureKit
 /// "in-memory and allowlisted by default", and a full-screen grab would sweep in
 /// every other window on the desktop. Nothing here writes to disk.
 enum WindowCapture {
-    /// Long edge of the encoded image. Large enough for a model to read UI
-    /// labels, small enough to keep the envelope well inside the frame ceiling.
-    static let maxLongEdge: CGFloat = 1600
+    /// Long edge of the encoded image when the user has expressed no
+    /// preference. Large enough for a model to read UI labels, small enough to
+    /// keep the envelope well inside the frame ceiling.
+    static let defaultLongEdge: CGFloat = 1600
     static let jpegQuality = 0.7
     /// Encoded bytes, before base64. Kept under the 64 KiB socket frame limit's
     /// intent by bounding the image itself rather than truncating a frame.
@@ -47,7 +48,7 @@ enum WindowCapture {
         }
     }
 
-    static func capture(bundleID: String, processID: pid_t) async throws -> Capture {
+    static func capture(bundleID: String, processID: pid_t, longEdge: CGFloat = defaultLongEdge) async throws -> Capture {
         let content: SCShareableContent
         do {
             content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
@@ -68,7 +69,7 @@ enum WindowCapture {
             throw Failure.noMatchingWindow
         }
 
-        let scale = min(1, maxLongEdge / max(window.frame.width, window.frame.height))
+        let scale = min(1, longEdge / max(window.frame.width, window.frame.height))
         let configuration = SCStreamConfiguration()
         configuration.width = Int((window.frame.width * scale).rounded())
         configuration.height = Int((window.frame.height * scale).rounded())

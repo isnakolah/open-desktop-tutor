@@ -6,18 +6,21 @@ import Foundation
 import SwiftUI
 import TutorProtocol
 
-/// Fallback only. The allowlist belongs to the App Pack that authored the
-/// lesson, so the gateway supplies it per request; hardcoding an application
-/// here is what stops a new pack from working without a new build.
-private let defaultAllowlistedBundleIDs: Set<String> = ["org.blenderfoundation.blender"]
-
+/// What this request may observe.
+///
+/// The lesson says which applications it is about; the user says which ones
+/// Calla is allowed near at all. The answer is the intersection, so a lesson can
+/// narrow the user's choice and never widen it.
+@MainActor
 private func allowlist(from payload: [String: JSONValue]) -> Set<String> {
-    guard case .array(let ids)? = payload["allowed_bundle_ids"] else { return defaultAllowlistedBundleIDs }
-    let parsed = Set(ids.compactMap { value -> String? in
-        if case .string(let id) = value, !id.isEmpty, id.count <= 255 { return id }
-        return nil
-    })
-    return parsed.isEmpty ? defaultAllowlistedBundleIDs : parsed
+    var requested: Set<String>?
+    if case .array(let ids)? = payload["allowed_bundle_ids"] {
+        requested = Set(ids.compactMap { value -> String? in
+            if case .string(let id) = value, !id.isEmpty, id.count <= 255 { return id }
+            return nil
+        })
+    }
+    return TutorSettings.shared.effectiveAllowlist(requested: requested)
 }
 private let maxRequestFrameBytes = 64 * 1024
 private let maxResponseFrameBytes = Int(1.5 * 1024 * 1024)
@@ -504,10 +507,11 @@ private final class AccessibilityTutorEngine {
         catch let error as DescriptorValidationError { throw TutorHostFailure(code: "invalid_region", message: error.message) }
     }
 
-    private func focusedAllowlistedApplication(_ allowed: Set<String> = defaultAllowlistedBundleIDs) throws -> FocusedApplication {
+    private func focusedAllowlistedApplication(_ allowed: Set<String>) throws -> FocusedApplication {
         guard let app = NSWorkspace.shared.frontmostApplication, let bundleID = app.bundleIdentifier,
               allowed.contains(bundleID) else {
-            throw TutorHostFailure(code: "app_not_allowed", message: "An allowlisted application must be focused")
+            throw TutorHostFailure(code: "app_not_allowed",
+                                   message: "The focused application is not one this Mac allows Calla to observe")
         }
         return FocusedApplication(application: app, element: AXUIElementCreateApplication(app.processIdentifier))
     }
@@ -574,7 +578,8 @@ private final class AccessibilityTutorEngine {
     private func captureFocusedWindow(_ snapshot: Snapshot) async throws -> Data {
         do {
             let capture = try await WindowCapture.capture(bundleID: snapshot.appBundleID,
-                                                          processID: snapshot.processID)
+                                                          processID: snapshot.processID,
+                                                          longEdge: CGFloat(TutorSettings.shared.captureLongEdge))
             guard capture.data.count <= maxCaptureJPEGBytes else {
                 throw TutorHostFailure(code: "capture_too_large", message: "The focused window JPEG exceeds the in-memory capture limit")
             }
@@ -903,6 +908,7 @@ final class PointerOverlay {
               "window": ["x": window.minX, "y": window.minY,
                          "width": window.width, "height": window.height],
               "owner": owner,
+              "dim": TutorSettings.shared.dimNearPointer,
               "step": step, "text": text, "status": status])
     }
 

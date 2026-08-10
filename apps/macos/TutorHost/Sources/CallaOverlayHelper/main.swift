@@ -220,6 +220,7 @@ final class CallaOverlay {
     /// this is about not covering what the learner is trying to look at.
     private var proximityAlpha: CGFloat = 1
     private var pointerWatch: Timer?
+    private var dimNearPointer = true
     /// Distance from Calla's pointer at which fading starts and bottoms out.
     private static let fadeBegins: CGFloat = 90
     private static let fadeFloor: CGFloat = 0.12
@@ -233,6 +234,17 @@ final class CallaOverlay {
     /// Panel origin that places the arrow tip exactly on `point`.
     private static func cursorOrigin(for point: CGPoint) -> CGPoint {
         CGPoint(x: point.x - hotspot.x, y: point.y - (cursorSize.height - hotspot.y))
+    }
+
+    /// Keep the pointer's tip inside the window being taught.
+    ///
+    /// A region near an edge, or a window that moved between the observation
+    /// and the draw, would otherwise put Calla's cursor on the desktop or on a
+    /// neighbouring application — annotating something it is not teaching.
+    private func clamped(_ point: CGPoint) -> CGPoint {
+        guard let window, window.width > 1, window.height > 1 else { return point }
+        return CGPoint(x: min(max(point.x, window.minX + 1), window.maxX - 1),
+                       y: min(max(point.y, window.minY + 1), window.maxY - 1))
     }
 
     /// `.nonactivatingPanel` is load-bearing, not cosmetic. A borderless
@@ -284,7 +296,8 @@ final class CallaOverlay {
         startPointerWatch()
     }
 
-    func begin(at point: CGPoint, step: String, text: String, status: String) {
+    func begin(at rawPoint: CGPoint, step: String, text: String, status: String) {
+        let point = clamped(rawPoint)
         cursor?.setFrameOrigin(Self.cursorOrigin(for: point))
         tooltip?.setFrame(tooltipFrame(for: point), display: true)
         setThinking(false, step: step, text: text)
@@ -349,8 +362,17 @@ final class CallaOverlay {
         pointerWatch = timer
     }
 
+    func setDimNearPointer(_ value: Bool) {
+        guard dimNearPointer != value else { return }
+        dimNearPointer = value
+        if !value, proximityAlpha != 1 {
+            proximityAlpha = 1
+            applyVisibility()
+        }
+    }
+
     func updateProximity() {
-        guard ownerIsFrontmost, let cursor else { return }
+        guard dimNearPointer, ownerIsFrontmost, let cursor else { return }
         let pointer = NSEvent.mouseLocation
         let rect = cursor.frame
         // Distance from the point to the pointer's own rect, zero inside it.
@@ -384,7 +406,8 @@ final class CallaOverlay {
         return CGRect(origin: CGPoint(x: x, y: y), size: size)
     }
 
-    func move(to point: CGPoint) {
+    func move(to rawPoint: CGPoint) {
+        let point = clamped(rawPoint)
         cursor?.setFrameOrigin(Self.cursorOrigin(for: point))
         tooltip?.setFrameOrigin(tooltipFrame(for: point).origin)
     }
@@ -426,6 +449,7 @@ struct Command: Decodable {
     let y: Double?
     let window: WindowRect?
     let owner: String?
+    let dim: Bool?
     let step: String?
     let text: String?
     let status: String?
@@ -545,6 +569,7 @@ Thread.detachNewThread {
                 switch command.cmd {
                 case "point":
                     guard let x = command.x, let y = command.y else { return }
+                    CallaOverlay.shared.setDimNearPointer(command.dim ?? true)
                     CallaOverlay.shared.adopt(owner: command.owner, window: command.window.map(cocoa))
                     Runner.shared.point(cocoa(CGPoint(x: x, y: y)),
                                         step: command.step ?? "Calla",
