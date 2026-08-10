@@ -1,8 +1,10 @@
+import AppKit
 import SwiftUI
 
 @main
 struct CallaTutorHostApp: App {
-    @StateObject private var host = TutorHostController()
+    @StateObject private var host = TutorHostController.shared
+    @NSApplicationDelegateAdaptor(CallaAppDelegate.self) private var appDelegate
 
     var body: some Scene {
         MenuBarExtra("Calla Tutor", systemImage: host.captureActive ? "eye.circle.fill" : "eye.slash") {
@@ -28,5 +30,14 @@ struct CallaTutorHostApp: App {
             .frame(width: 340)
             .task { await host.start() }
         }
+    }
+}
+
+// MenuBarExtra only builds its content when the menu is opened, so a `.task`
+// there would delay the socket until a human clicked the icon. Start at launch.
+final class CallaAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
+        Task { await TutorHostController.shared.start() }
     }
 }

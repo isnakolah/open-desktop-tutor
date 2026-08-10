@@ -96,18 +96,17 @@ final class TutorHostController: ObservableObject {
     @Published var status = "Starting local TutorHost"
     @Published var pendingApproval: PendingApproval?
 
+    // Shared so the app delegate can start the socket at launch and the menu
+    // can observe the same instance.
+    static let shared = TutorHostController()
+
     private let engine = AccessibilityTutorEngine()
     private var socketServer: UnixSocketServer?
 
     func start() async {
         guard socketServer == nil else { return }
         do {
-            let server = try UnixSocketServer(path: Self.socketPath) { [weak self] request in
-                guard let self else {
-                    return TutorResponse(requestID: request.requestID, ok: false, payload: nil, error: TutorError(code: "host_stopped", message: "TutorHost is unavailable"))
-                }
-                return await self.handle(request)
-            }
+            let server = try UnixSocketServer(path: Self.socketPath, delegate: self)
             try server.start()
             socketServer = server
             status = "Local TutorHost ready"
@@ -116,7 +115,7 @@ final class TutorHostController: ObservableObject {
         }
     }
 
-    private func handle(_ request: TutorRequest) async -> TutorResponse {
+    fileprivate func handle(_ request: TutorRequest) async -> TutorResponse {
         guard request.protocolVersion == 1 else { return failure(request, "unsupported_version", "Tutor protocol version 1 is required") }
         guard request.sessionID.count >= 8 else { return failure(request, "invalid_session", "A valid teaching session is required") }
         guard captureActive else { return failure(request, "capture_paused", "Capture is paused locally") }
@@ -163,6 +162,9 @@ final class TutorHostController: ObservableObject {
     static let socketPath = NSHomeDirectory() + "/Library/Application Support/OpenDesktopTutor/tutor-host.sock"
 }
 
+// Every call site is on the @MainActor TutorHostController, and point() drives
+// an AppKit overlay, so state the isolation the code already relies on.
+@MainActor
 private final class AccessibilityTutorEngine {
     private var snapshots: [String: Snapshot] = [:]
     private let maxSnapshotAge: TimeInterval = 4
@@ -261,7 +263,19 @@ private final class AccessibilityTutorEngine {
 
 private func copyElementAttribute(_ element: AXUIElement, _ attribute: CFString) -> AXUIElement? {
     var value: CFTypeRef?
-    return AXUIElementCopyAttributeValue(element, attribute, &value) == .success ? value as? AXUIElement : nil
+    guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+          let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+    return (value as! AXUIElement)
+}
+
+// AXValue is a CoreFoundation type, so `as?` always succeeds and cannot be used
+// to test the payload. Check the CFTypeID, then the AXValue's own type tag.
+private func axValueAttribute(_ element: AXUIElement, _ attribute: CFString, _ type: AXValueType) -> AXValue? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+          let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+    let axValue = (value as! AXValue)
+    return AXValueGetType(axValue) == type ? axValue : nil
 }
 
 private func stringAttribute(_ element: AXUIElement, _ attribute: CFString) -> String? {
@@ -274,16 +288,19 @@ private func boolAttribute(_ element: AXUIElement, _ attribute: CFString) -> Boo
     return AXUIElementCopyAttributeValue(element, attribute, &value) == .success ? (value as? NSNumber)?.boolValue : nil
 }
 
+// There is no public kAXFrameAttribute; compose the frame from the documented
+// position and size attributes instead of the undocumented "AXFrame".
 private func frameAttribute(_ element: AXUIElement) throws -> CGRect {
-    var value: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, kAXFrameAttribute as CFString, &value) == .success,
-          let axValue = value as? AXValue,
-          AXValueGetType(axValue) == .cgRect else {
+    guard let positionValue = axValueAttribute(element, kAXPositionAttribute as CFString, .cgPoint),
+          let sizeValue = axValueAttribute(element, kAXSizeAttribute as CFString, .cgSize) else {
         throw TutorHostFailure(code: "missing_frame", message: "The resolved Accessibility element has no usable frame")
     }
-    var frame = CGRect.zero
-    AXValueGetValue(axValue, .cgRect, &frame)
-    return frame
+    var origin = CGPoint.zero
+    var size = CGSize.zero
+    guard AXValueGetValue(positionValue, .cgPoint, &origin), AXValueGetValue(sizeValue, .cgSize, &size) else {
+        throw TutorHostFailure(code: "missing_frame", message: "The resolved Accessibility element has no usable frame")
+    }
+    return CGRect(origin: origin, size: size)
 }
 
 private func descendants(of element: AXUIElement, maxDepth: Int) -> [AXUIElement] {
@@ -294,6 +311,9 @@ private func descendants(of element: AXUIElement, maxDepth: Int) -> [AXUIElement
     return children + children.flatMap { descendants(of: $0, maxDepth: maxDepth - 1) }
 }
 
+// AppKit windows are main-actor only, and the sole call site is the
+// @MainActor TutorHostController, so isolate the overlay to the main actor.
+@MainActor
 private final class PointerOverlay {
     static let shared = PointerOverlay()
     private var window: NSWindow?
@@ -313,15 +333,32 @@ private final class PointerOverlay {
     }
 }
 
+// File-scope rather than a static method on UnixSocketServer: see acceptConnection.
+private func serveConnection(client: Int32, delegate: TutorHostController?) async {
+    defer { close(client) }
+    do {
+        let request = try UnixSocketServer.readRequest(client)
+        guard let delegate else {
+            try UnixSocketServer.write(TutorResponse(requestID: request.requestID, ok: false, payload: nil, error: TutorError(code: "host_stopped", message: "TutorHost is unavailable")), to: client)
+            return
+        }
+        let response = await delegate.handle(request)
+        try UnixSocketServer.write(response, to: client)
+    } catch {
+        let response = TutorResponse(requestID: UUID().uuidString, ok: false, payload: nil, error: TutorError(code: "protocol_error", message: error.localizedDescription))
+        try? UnixSocketServer.write(response, to: client)
+    }
+}
+
 private final class UnixSocketServer {
     private let path: String
-    private let handler: @Sendable (TutorRequest) async -> TutorResponse
+    private weak var delegate: TutorHostController?
     private var fileDescriptor: Int32 = -1
     private var source: DispatchSourceRead?
 
-    init(path: String, handler: @escaping @Sendable (TutorRequest) async -> TutorResponse) throws {
+    init(path: String, delegate: TutorHostController) throws {
         self.path = path
-        self.handler = handler
+        self.delegate = delegate
     }
 
     deinit { stop() }
@@ -339,7 +376,7 @@ private final class UnixSocketServer {
             close(descriptor)
             throw TutorHostFailure(code: "socket_path_too_long", message: "The TutorHost socket path is too long")
         }
-        path.withCString { source in
+        _ = path.withCString { source in
             withUnsafeMutablePointer(to: &address.sun_path.0) { destination in
                 strncpy(destination, source, byteCount)
             }
@@ -377,19 +414,15 @@ private final class UnixSocketServer {
     private func acceptConnection() {
         let client = accept(fileDescriptor, nil, nil)
         guard client >= 0 else { return }
-        Task.detached { [handler] in
-            defer { close(client) }
-            do {
-                let request = try Self.readRequest(client)
-                try Self.write(await handler(request), to: client)
-            } catch {
-                let response = TutorResponse(requestID: UUID().uuidString, ok: false, payload: nil, error: TutorError(code: "protocol_error", message: error.localizedDescription))
-                try? Self.write(response, to: client)
-            }
-        }
+        // serveConnection is a file-scope function, not a static method: calling a
+        // static member of this non-Sendable class from inside a Task makes the
+        // region-based isolation checker fail with "pattern that the region-based
+        // isolation checker does not understand how to check. Please file a bug."
+        let target = delegate
+        Task { await serveConnection(client: client, delegate: target) }
     }
 
-    private static func readRequest(_ descriptor: Int32) throws -> TutorRequest {
+    fileprivate static func readRequest(_ descriptor: Int32) throws -> TutorRequest {
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 4096)
         while data.count <= maxFrameBytes {
@@ -405,7 +438,7 @@ private final class UnixSocketServer {
         return try JSONDecoder().decode(TutorRequest.self, from: data)
     }
 
-    private static func write(_ response: TutorResponse, to descriptor: Int32) throws {
+    fileprivate static func write(_ response: TutorResponse, to descriptor: Int32) throws {
         var data = try JSONEncoder().encode(response)
         data.append(10)
         guard data.count <= maxFrameBytes else { throw TutorHostFailure(code: "frame_limit", message: "TutorHost response exceeds 64 KiB") }
