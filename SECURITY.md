@@ -10,6 +10,9 @@ Open Desktop Tutor is pre-release software and must not yet be used to control s
 - Consequential input requires exact window identity, a fresh semantic target receipt, an authored expected state, and local approval.
 - Secure input, authentication, purchases, destructive operations, external submissions, and terminal/code execution prohibit mutations.
 - Screenshots are in-memory and allowlisted by default; persistence requires an explicit user feature and separate review.
+- Window capture is opt-in per request, covers exactly one allowlisted window, and never a display. Nothing is written to disk.
+- A vision model may return a normalised search hint (`0..1`, relative to the captured window) and never a pixel or screen coordinate. Hints are accepted by `tutor_point` only; `tutor_propose_action` rejects them, so a hint can never authorise a mutation. Pointing is non-consequential, so a hint alone may place the AI cursor, capped below any action threshold and recorded as `model_hint` evidence.
+- App Packs are untrusted, so pack-authored matchers are bounded: pattern length, subject length, and rejection of nested-quantifier patterns that permit catastrophic backtracking.
 
 ## Reporting
 

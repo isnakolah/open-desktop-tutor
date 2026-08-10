@@ -22,15 +22,16 @@ OpenClaw node host on the user's Mac (Calla node role)
                  ▼
 CallaTutorHost.app
   request validation
-  focused-Blender allowlist
-  Accessibility semantic target resolver
-  local highlight
+  pack-authored bundle-id allowlist
+  descriptor-driven target resolver (no application-specific code)
+  single-window in-memory capture (ScreenCaptureKit)
+  AI cursor + tooltip overlay
   local one-shot approval
   Accessibility press / verify adapter
                  │
                  ├── macOS Accessibility
-                 └── optional read-only Blender Tutor Bridge
-                         ping / observe_state only
+                 ├── macOS ScreenCaptureKit (one allowlisted window)
+                 └── optional read-only app bridge (Blender: ping / observe_state)
 ```
 
 ## Authority boundaries
@@ -38,6 +39,13 @@ CallaTutorHost.app
 ### Brain
 
 The brain may select a teaching move and request a semantic operation. It cannot issue executable screen coordinates, CGEvents, shell commands, or arbitrary Blender Python. Screen pixels and retrieved documentation are untrusted input.
+
+When capture is requested, one allowlisted window is sent to the user-owned
+gateway so a vision model can suggest where a target is. What comes back is a
+**hint, not authority**: normalised to the captured window, carrying no pixel or
+screen coordinate, accepted only by `point`, and rejected outright by
+`propose_action`. The Mac still decides where things are and whether anything
+may happen to them.
 
 ### OpenClaw plugin
 
@@ -54,7 +62,10 @@ TutorHost is the non-delegable trust boundary. It will:
 
 1. require focused Blender and the authored Modifier Properties target;
 2. obtain a fresh observation receipt;
-3. resolve the semantic target through macOS Accessibility;
+3. resolve the semantic target by executing the App Pack's authored `resolve:`
+   contract, not application-specific code. Accessibility is one provider; apps
+   that render their own UI (Blender draws in OpenGL and exposes an empty
+   Accessibility tree) resolve instead from a normalised vision hint;
 4. require operation-specific confidence;
 5. show a local highlight and collect local approval;
 6. revalidate snapshot/window identity immediately before dispatch;

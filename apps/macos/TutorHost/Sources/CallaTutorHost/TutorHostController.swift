@@ -4,7 +4,11 @@ import Darwin
 import Foundation
 import SwiftUI
 
-private let maxFrameBytes = 64 * 1024
+/// Requests stay tightly bounded: they are the untrusted, attacker-facing side.
+private let maxRequestBytes = 64 * 1024
+/// Responses may carry an in-memory window capture, which is far larger than a
+/// request but is produced by this host, not supplied to it.
+private let maxResponseBytes = 8 * 1024 * 1024
 
 private struct TutorRequest: Codable, Sendable {
     let protocolVersion: Int
@@ -123,7 +127,7 @@ final class TutorHostController: ObservableObject {
         do {
             let payload: [String: JSONValue]
             switch request.operation {
-            case "observe": payload = try engine.observe(request.payload)
+            case "observe": payload = try await engine.observe(request.payload)
             case "point": payload = try engine.point(request.payload)
             case "propose_action": payload = try await proposeAction(request.payload)
             case "verify": payload = try engine.verify(request.payload)
@@ -178,18 +182,41 @@ final class TutorHostController: ObservableObject {
 @MainActor
 private final class AccessibilityTutorEngine {
     private var snapshots: [String: Snapshot] = [:]
+    /// Window bounds reported by the capture, so a hint normalised against the
+    /// captured image maps back to exactly the same rectangle.
+    private var captureFrames: [String: CGRect] = [:]
     private let maxSnapshotAge: TimeInterval = 4
 
-    func observe(_ payload: [String: JSONValue]) throws -> [String: JSONValue] {
+    func observe(_ payload: [String: JSONValue]) async throws -> [String: JSONValue] {
         let (app, runningApp) = try focusedAllowedApp(allowlist: Self.allowlist(from: payload))
         let snapshot = try makeSnapshot(for: app)
         snapshots[snapshot.id] = snapshot
-        return [
+        var result: [String: JSONValue] = [
             "status": .string("ok"),
             "snapshot_id": .string(snapshot.id),
             "app_bundle_id": .string(runningApp.bundleIdentifier ?? "unknown"),
             "app_version": .string(snapshot.appVersion),
         ]
+
+        // Capture is opt-in per request and covers only this one allowlisted
+        // window. It is held in memory and never written to disk.
+        guard case .bool(true)? = payload["include_crop"] else { return result }
+        guard let bundleID = runningApp.bundleIdentifier else { return result }
+        do {
+            let capture = try await WindowCapture.capture(bundleID: bundleID, processID: snapshot.processID)
+            captureFrames[snapshot.id] = capture.windowFrame
+            result["capture"] = .object([
+                "format": .string("image/jpeg"),
+                "width": .number(Double(capture.pixelWidth)),
+                "height": .number(Double(capture.pixelHeight)),
+                "data_base64": .string(capture.base64),
+            ])
+        } catch WindowCapture.Failure.notPermitted {
+            result["capture_error"] = .string("screen_recording_not_permitted")
+        } catch {
+            result["capture_error"] = .string("capture_failed")
+        }
+        return result
     }
 
     func point(_ payload: [String: JSONValue]) throws -> [String: JSONValue] {
@@ -281,7 +308,7 @@ private final class AccessibilityTutorEngine {
         guard Date().timeIntervalSince(snapshot.createdAt) <= maxSnapshotAge else {
             throw TutorHostFailure(code: "stale_snapshot", message: "The observation receipt is stale")
         }
-        let window = snapshot.windowFrame
+        let window = captureFrames[snapshotID] ?? snapshot.windowFrame
         let frame = CGRect(x: window.origin.x + x * window.width,
                            y: window.origin.y + y * window.height,
                            width: max(width * window.width, 8),
@@ -667,14 +694,14 @@ private final class UnixSocketServer {
     fileprivate static func readRequest(_ descriptor: Int32) throws -> TutorRequest {
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 4096)
-        while data.count <= maxFrameBytes {
+        while data.count <= maxRequestBytes {
             let count = read(descriptor, &buffer, buffer.count)
             if count < 0 { throw TutorHostFailure(code: "socket_read_failed", message: String(cString: strerror(errno))) }
             if count == 0 { break }
             data.append(buffer, count: count)
             if data.last == 10 { break }
         }
-        guard data.count > 0, data.count <= maxFrameBytes, data.last == 10 else {
+        guard data.count > 0, data.count <= maxRequestBytes, data.last == 10 else {
             throw TutorHostFailure(code: "frame_limit", message: "TutorHost requires one newline-delimited request under 64 KiB")
         }
         return try JSONDecoder().decode(TutorRequest.self, from: data)
@@ -683,7 +710,7 @@ private final class UnixSocketServer {
     fileprivate static func write(_ response: TutorResponse, to descriptor: Int32) throws {
         var data = try JSONEncoder().encode(response)
         data.append(10)
-        guard data.count <= maxFrameBytes else { throw TutorHostFailure(code: "frame_limit", message: "TutorHost response exceeds 64 KiB") }
+        guard data.count <= maxResponseBytes else { throw TutorHostFailure(code: "frame_limit", message: "TutorHost response exceeds the response ceiling") }
         try data.withUnsafeBytes { bytes in
             var offset = 0
             while offset < data.count {
