@@ -377,6 +377,7 @@ final class CallaOverlay {
     /// The learner pressed something in the tooltip. The host is listening on
     /// this process's stdout, because it owns the connection to Calla.
     static func emit(_ event: String, _ text: String) {
+        if event == "ask" { CallaOverlay.shared.askOpen = false }
         let payload: [String: Any] = ["event": event, "text": text]
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let line = String(data: data, encoding: .utf8) else { return }
@@ -386,6 +387,12 @@ final class CallaOverlay {
     private var pointerWatch: Timer?
     private var hideOnHover = true
     private var followFocus = true
+    /// True while the question field is open. Asking necessarily brings Calla
+    /// forward so the field can take keystrokes, and the scoping rule would
+    /// then read that as the learner leaving and hide the lesson mid-question.
+    /// Rather than trying to out-guess which process macOS calls frontmost,
+    /// scoping is simply suspended for as long as the field is up.
+    private var askOpen = false
     private var hudEnabled = true
 
     /// The size the artwork is currently drawn at, inside a panel that is
@@ -489,6 +496,7 @@ final class CallaOverlay {
         self.status(status)
         let arriving = tooltip?.alphaValue ?? 0 < 0.5
         narrating = true
+        askOpen = false
         pointerIsOver = false
         Shortcuts.shared.claim()
         show()
@@ -517,6 +525,12 @@ final class CallaOverlay {
     }
 
     func frontmostApplicationChanged(to bundleID: String?) {
+        // Calla coming forward is not the learner leaving.
+        //
+        // Asking a question activates this process so the field can take
+        // keystrokes, which made the frontmost application Calla — and the
+        // scoping rule then hid the whole lesson the instant the shortcut was
+        // pressed. Its own windows never count as somewhere else.
         let isOwner = owner == nil || bundleID == owner
         guard isOwner != ownerIsFrontmost else { return }
         ownerIsFrontmost = isOwner
@@ -541,7 +555,12 @@ final class CallaOverlay {
     /// notification: the overlay would hide and never come back. Frontmost is
     /// polled on the pointer timer now, so that cannot happen.
     private func applyVisibility() {
-        let onScreen = !followFocus || ownerIsFrontmost
+        // Claim the shortcuts whenever a lesson is up, and give them back when
+        // it is not. Claiming only on the first step meant every later step —
+        // which takes a different path — ran with no keys registered, and one
+        // hide released them for the rest of the session.
+        if narrating { Shortcuts.shared.claim() } else { Shortcuts.shared.release() }
+        let onScreen = !followFocus || ownerIsFrontmost || askOpen
         cursor?.alphaValue = onScreen ? 1 : 0
         // The tooltip is the only thing that gets out of the way, and it does it
         // by disappearing rather than moving or fading: moving detached the
@@ -621,7 +640,10 @@ final class CallaOverlay {
 
     /// Open the tooltip's question field from a shortcut.
     func beginAsking() {
+        FileHandle.standardError.write("[calla] ask requested, narrating=\(narrating)\n".data(using: .utf8)!)
         guard narrating else { return }
+        askOpen = true
+        applyVisibility()
         askingRequested += 1
         tooltip?.contentView = NSHostingView(rootView:
             CallaTooltip(accent: accent, step: currentStep, text: currentText,
@@ -655,7 +677,15 @@ final class CallaOverlay {
         // taught application is behind. If that one notification is missed the
         // overlay would never come back. Polling a timer that already runs
         // costs nothing and cannot miss.
-        frontmostApplicationChanged(to: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+        // Calla coming forward is not the learner leaving. Asking a question
+        // activates this process so the field can take keystrokes, and the
+        // scoping rule would otherwise hide the whole lesson the instant the
+        // shortcut was pressed. Compared by process, not bundle id, because the
+        // renderer is a nested helper and its identifier is easy to get wrong.
+        if let front = NSWorkspace.shared.frontmostApplication,
+           front.processIdentifier != NSRunningApplication.current.processIdentifier {
+            frontmostApplicationChanged(to: front.bundleIdentifier)
+        }
 
         // Hide the tooltip while the learner's pointer is over it.
         //
@@ -898,6 +928,7 @@ final class Shortcuts {
         guard installed, registered.isEmpty else { return }
         unavailable = []
         let modifiers = UInt32(optionKey | cmdKey)
+        note("claiming shortcuts")
         for binding in Self.bindings {
             var reference: EventHotKeyRef?
             let status = RegisterEventHotKey(
@@ -910,9 +941,17 @@ final class Shortcuts {
                 unavailable.append(binding.label)
             }
         }
+        note("claimed \(registered.count) of \(Self.bindings.count)"
+             + (unavailable.isEmpty ? "" : "; unavailable: \(unavailable.joined(separator: " "))"))
         if !unavailable.isEmpty {
             CallaOverlay.emit("shortcuts_unavailable", unavailable.joined(separator: " "))
         }
+    }
+
+    /// Calla's own log line. stdout belongs to the host's command channel, so
+    /// anything diagnostic has to go to stderr.
+    private func note(_ message: String) {
+        FileHandle.standardError.write("[calla] \(message)\n".data(using: .utf8)!)
     }
 
     func release() {
@@ -924,6 +963,10 @@ final class Shortcuts {
 
     fileprivate func fire(_ id: UInt32) {
         guard let binding = Self.bindings.first(where: { $0.id == id }) else { return }
+        // Logged because whether a hot key arrives cannot be observed from
+        // outside the process: macOS lets several applications register the
+        // same combination, so a successful registration proves nothing.
+        note("hotkey \(binding.label) -> \(binding.event)")
         if binding.event == "ask" {
             CallaOverlay.shared.beginAsking()
         } else {
