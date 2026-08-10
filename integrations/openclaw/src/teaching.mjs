@@ -44,9 +44,15 @@ Rules that matter:
 - tutor_propose_action exists only for App-Pack-authored steps and needs local
   approval on the Mac. It refuses visual regions by design. Do not reach for it
   to work around the fact that guiding cannot act.
-- If observe returns app_not_allowed, either the learner has a different window
-  in front, or allowed_bundle_ids did not name the application they are using.
-  Ask which application they want taught rather than guessing bundle ids.`;
+- The learner is almost certainly asking you from the same Mac you are teaching
+  on, so the application they mean is behind the window they typed into. The Mac
+  resolves that itself and observe tells you which application it used — check
+  app_bundle_id and say which one you are teaching. The overlay only appears
+  while that application is in front, so your first message should tell them to
+  switch back to it; the cursor will be waiting when they do.
+- If observe returns app_not_allowed, no application Calla is permitted to
+  observe has been used recently. Tell them to focus the application once and
+  add it in Calla's menu bar, rather than guessing bundle ids.`;
 
 export const TEACHING_GUIDANCE = Object.freeze([
   Object.freeze({text: LOOP, surfaces: Object.freeze(["openclaw_main", "codex_app_server", "cli_backend"])}),

@@ -563,13 +563,31 @@ private final class AccessibilityTutorEngine {
         catch let error as DescriptorValidationError { throw TutorHostFailure(code: "invalid_region", message: error.message) }
     }
 
+    /// The application this lesson is about.
+    ///
+    /// Normally that is whatever is in front. But asking Calla for a lesson
+    /// means typing somewhere — a chat window, a terminal — and on this Mac that
+    /// is the same screen, so by the time the request arrives the application
+    /// the learner meant is behind the one they typed into. Requiring it to be
+    /// frontmost made the product impossible to trigger from the machine it
+    /// teaches on.
+    ///
+    /// So when the front application is not one Calla may observe, fall back to
+    /// the most recent one that was. The allowlist is still the entire
+    /// permission boundary: this can only ever land on an application the owner
+    /// already allowed, and only one they were using themselves.
     private func focusedAllowlistedApplication(_ allowed: Set<String>) throws -> FocusedApplication {
-        guard let app = NSWorkspace.shared.frontmostApplication, let bundleID = app.bundleIdentifier,
-              allowed.contains(bundleID) else {
-            throw TutorHostFailure(code: "app_not_allowed",
-                                   message: "The focused application is not one this Mac allows Calla to observe")
+        if let app = NSWorkspace.shared.frontmostApplication, let bundleID = app.bundleIdentifier,
+           allowed.contains(bundleID) {
+            LessonSubject.shared.remember(app)
+            return FocusedApplication(application: app, element: AXUIElementCreateApplication(app.processIdentifier))
         }
-        return FocusedApplication(application: app, element: AXUIElementCreateApplication(app.processIdentifier))
+        if let recent = LessonSubject.shared.mostRecent(in: allowed) {
+            return FocusedApplication(application: recent, element: AXUIElementCreateApplication(recent.processIdentifier))
+        }
+        throw TutorHostFailure(
+            code: "app_not_allowed",
+            message: "No application this Mac allows Calla to observe is open. Focus it once, then ask again.")
     }
 
     /// Builds the observation receipt without touching Accessibility.
