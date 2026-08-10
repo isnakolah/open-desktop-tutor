@@ -140,6 +140,7 @@ final class TutorHostController: ObservableObject {
             switch request.operation {
             case "observe": payload = try await engine.observe(request.payload)
             case "guide": payload = try engine.guide(request.payload)
+            case "await_change": payload = try await engine.awaitChange(request.payload)
             case "narrate": payload = engine.narrate(request.payload)
             case "point": payload = try engine.point(request.payload)
             case "propose_action": payload = try await proposeAction(request.payload)
@@ -302,6 +303,58 @@ private final class AccessibilityTutorEngine {
                 "valid_until": .string("next_window_mutation"),
             ]),
         ]
+    }
+
+    /// Wait until the learner does something, then say so.
+    ///
+    /// This is what turns a single instruction into a lesson. Without it the
+    /// model points once and stops, because nothing tells it the step was
+    /// finished — the learner clicks, and Calla is still talking about the
+    /// previous thing. Polling a coarse greyscale fingerprint of the window
+    /// keeps the judgement on this Mac; only "it changed" crosses the wire.
+    ///
+    /// Returns rather than blocks when the wait runs out, so the model can
+    /// decide whether to keep waiting, re-word the step, or move on.
+    func awaitChange(_ payload: [String: JSONValue]) async throws -> [String: JSONValue] {
+        let window = try liveWindow(for: payload)
+        let requested = payload["timeout_seconds"]?.numberValue ?? 15
+        let deadline = Date().addingTimeInterval(min(max(requested, 1), 25))
+        let threshold = min(max(payload["sensitivity"]?.numberValue ?? 0.02, 0.005), 0.5)
+
+        let baseline = try await thumbprint(window.snapshot)
+        var latest = baseline
+        var difference = 0.0
+        while Date() < deadline {
+            try await Task.sleep(nanoseconds: 400_000_000)
+            // The learner switching away is not a change in the lesson's window,
+            // and re-reading a window that is no longer there is meaningless.
+            guard let focused = NSWorkspace.shared.frontmostApplication,
+                  focused.bundleIdentifier == window.snapshot.appBundleID else { continue }
+            latest = (try? await thumbprint(window.snapshot)) ?? latest
+            difference = WindowCapture.difference(baseline, latest)
+            if difference >= threshold { break }
+        }
+        let changed = difference >= threshold
+        return [
+            "status": .string("ok"),
+            "changed": .bool(changed),
+            "difference": .number((difference * 1000).rounded() / 1000),
+            "snapshot_id": .string(window.snapshot.id),
+            "next": .string(changed
+                            ? "Observe again; the window is not what you last saw."
+                            : "Nothing moved. The learner may be stuck, or the step may already have been done."),
+        ]
+    }
+
+    private func thumbprint(_ snapshot: Snapshot) async throws -> [UInt8] {
+        do {
+            return try await WindowCapture.thumbprint(bundleID: snapshot.appBundleID, processID: snapshot.processID)
+        } catch WindowCapture.Failure.notPermitted {
+            throw TutorHostFailure(code: "screen_recording_not_permitted",
+                                   message: "Screen Recording permission is required to notice the window changing")
+        } catch {
+            throw TutorHostFailure(code: "capture_failed", message: "The focused allowlisted window could not be read")
+        }
     }
 
     /// Re-word the tooltip without moving the cursor, so the model can keep

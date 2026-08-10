@@ -91,6 +91,29 @@ const definitions = {
       },
     },
   },
+  tutor_await_change: {
+    label: "Tutor Await Change",
+    description:
+      "Wait until the learner actually does something in the window, then return. This is how a lesson advances: guide a step, wait here, observe again, guide the next one. Returns changed false if the wait ran out, so you can re-word the step or keep waiting.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["session_id", "snapshot_id"],
+      properties: {
+        ...baseSessionProperty,
+        ...allowedBundleIDsProperty,
+        snapshot_id: {type: "string", minLength: 1},
+        timeout_seconds: {type: "number", minimum: 1, maximum: 25, default: 15},
+        sensitivity: {
+          type: "number",
+          minimum: 0.005,
+          maximum: 0.5,
+          default: 0.02,
+          description: "How much of the window must differ to count as a change. Lower notices smaller edits.",
+        },
+      },
+    },
+  },
   tutor_narrate: {
     label: "Tutor Narrate",
     description:
@@ -243,11 +266,18 @@ export function createTutorTools(api, config) {
           "desktop-tutor is not configured: set plugins.entries.desktop-tutor.config.nodeId to the paired Mac node id",
         );
       }
+      // Waiting for the learner is the one call that is meant to take a while,
+      // so it gets a transport timeout longer than its own wait rather than
+      // being cut off mid-wait by the default.
+      const waitSeconds = name === "tutor_await_change" ? Number(envelope.payload.timeout_seconds ?? 15) : 0;
+      const timeoutMs = waitSeconds > 0
+        ? Math.max(config.timeoutMs, Math.round(waitSeconds * 1000) + 5_000)
+        : config.timeoutMs;
       const invoked = await api.runtime.nodes.invoke({
         nodeId: config.nodeId,
         command: "desktop-tutor.host",
         params: envelope,
-        timeoutMs: config.timeoutMs,
+        timeoutMs,
       });
       const result = unwrapNodePayload(invoked);
       return name === "tutor_observe" ? observationResult(result) : jsonResult(result);

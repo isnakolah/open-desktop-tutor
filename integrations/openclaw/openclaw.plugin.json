@@ -6,11 +6,14 @@
   "name": "Calla",
   "description": "Connect the Calla OpenClaw brain to a user-owned, teaching-first macOS TutorHost.",
   "contracts": {
-    "commands": ["teach"],
+    "commands": [
+      "teach"
+    ],
     "tools": [
       "tutor_observe",
       "tutor_retrieve",
       "tutor_guide",
+      "tutor_await_change",
       "tutor_narrate",
       "tutor_point",
       "tutor_propose_action",
@@ -22,7 +25,11 @@
     "additionalProperties": false,
     "properties": {
       "role": {
-        "enum": ["gateway", "node", "both"],
+        "enum": [
+          "gateway",
+          "node",
+          "both"
+        ],
         "default": "gateway"
       },
       "developmentMode": {
@@ -54,12 +61,29 @@
     }
   },
   "toolMetadata": {
-    "tutor_observe": {"risk": "medium"},
-    "tutor_retrieve": {"risk": "low"},
-    "tutor_guide": {"risk": "low"},
-    "tutor_narrate": {"risk": "low"},
-    "tutor_point": {"risk": "low"},
-    "tutor_propose_action": {"risk": "high"},
-    "tutor_verify": {"risk": "low"}
+    "tutor_observe": {
+      "risk": "medium"
+    },
+    "tutor_retrieve": {
+      "risk": "low"
+    },
+    "tutor_guide": {
+      "risk": "low"
+    },
+    "tutor_narrate": {
+      "risk": "low"
+    },
+    "tutor_point": {
+      "risk": "low"
+    },
+    "tutor_propose_action": {
+      "risk": "high"
+    },
+    "tutor_verify": {
+      "risk": "low"
+    },
+    "tutor_await_change": {
+      "risk": "low"
+    }
   }
 }

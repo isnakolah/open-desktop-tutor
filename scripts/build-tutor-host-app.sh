@@ -7,10 +7,10 @@
 # of a build-directory path that moves. And the overlay renderer only composites
 # when it is its own application, so it ships nested at Contents/Helpers.
 #
-# Ad-hoc signing still changes the code hash on every rebuild, and TCC keys the
-# grant to that hash, so macOS re-asks for Screen Recording after a rebuild. A
-# real Developer ID identity is what would make the grant stick; until there is
-# one, expect one approval per rebuild.
+# Signing matters for the same reason: ad-hoc signing has no identity, so macOS
+# ties the grant to the code hash and revokes it on every rebuild.
+# scripts/calla-signing-identity.sh creates a local certificate that makes the
+# grant survive; without it this falls back to ad-hoc and one approval per build.
 set -euo pipefail
 
 SCRIPT_DIRECTORY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -126,11 +126,20 @@ if [[ -f "$ICON_SOURCE" ]]; then
   fi
 fi
 
-# Ad-hoc signing with a stable identifier, inner bundle first, so the host shows
-# up under one name in System Settings rather than accumulating an entry per
-# build. The code hash still changes, so the grant itself does not carry over.
-codesign --force --sign - --identifier com.calla.tutor-host.overlay "$HELPER_APP"
-codesign --force --sign - --identifier com.calla.tutor-host "$STAGED_APP"
+# Sign with the local identity when there is one, inner bundle first. That is
+# what gives the bundle a designated requirement naming its identifier and
+# certificate rather than its bytes, so a Screen Recording grant survives a
+# rebuild. Ad-hoc is the fallback and costs an approval per build.
+SIGNING_IDENTITY="${CALLA_SIGNING_IDENTITY:-Calla Local Signing}"
+if security find-certificate -c "$SIGNING_IDENTITY" "$HOME/Library/Keychains/login.keychain-db" >/dev/null 2>&1; then
+  SIGN_WITH="$SIGNING_IDENTITY"
+  echo "Signing with $SIGNING_IDENTITY"
+else
+  SIGN_WITH="-"
+  echo "Signing ad-hoc; run ./scripts/calla-signing-identity.sh to keep permissions across rebuilds."
+fi
+codesign --force --sign "$SIGN_WITH" --identifier com.calla.tutor-host.overlay "$HELPER_APP"
+codesign --force --sign "$SIGN_WITH" --identifier com.calla.tutor-host "$STAGED_APP"
 codesign --verify --deep --strict "$STAGED_APP"
 
 if [[ "$RESTART" -eq 1 ]] && pgrep -f "Calla TutorHost.app/Contents/MacOS/CallaTutorHost" >/dev/null 2>&1; then
@@ -157,8 +166,9 @@ cat <<EOF
 Calla TutorHost is running in the menu bar.
 
 macOS asks for Screen Recording the first time a lesson requests a window
-capture, and asks again after a rebuild because the ad-hoc code hash changes.
-Approve "Calla TutorHost" here, then teaching works without Accessibility:
+capture. Signed with $SIGN_WITH, that approval is tied to the signing identity
+rather than to the exact bytes, so a rebuild keeps it. Approve "Calla TutorHost"
+here, and teaching works without Accessibility:
 
   System Settings > Privacy & Security > Screen & System Audio Recording
 

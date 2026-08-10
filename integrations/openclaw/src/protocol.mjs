@@ -11,6 +11,7 @@ export const TUTOR_TOOL_NAMES = Object.freeze([
   "tutor_observe",
   "tutor_retrieve",
   "tutor_guide",
+  "tutor_await_change",
   "tutor_narrate",
   "tutor_point",
   "tutor_propose_action",
@@ -21,6 +22,7 @@ const TOOL_TO_OPERATION = Object.freeze({
   tutor_observe: "observe",
   tutor_retrieve: "retrieve",
   tutor_guide: "guide",
+  tutor_await_change: "await_change",
   tutor_narrate: "narrate",
   tutor_point: "point",
   tutor_propose_action: "propose_action",
@@ -125,6 +127,9 @@ export function validateToolPayload(toolName, payload) {
     if (Object.hasOwn(payload, "target_descriptor")) {
       throw new TypeError("tutor_guide never carries a descriptor; it points at what the model saw in the capture");
     }
+  }
+  if (toolName === "tutor_await_change") {
+    validateSnapshot(payload.snapshot_id);
   }
   if (toolName === "tutor_narrate") {
     requireString(payload.text, "text");

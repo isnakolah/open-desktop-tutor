@@ -121,6 +121,7 @@ test("gateway role registers semantic tools and policy without a Mac node handle
   assert.deepEqual(
     registrations.tools.map((tool) => tool.name).sort(),
     [
+      "tutor_await_change",
       "tutor_guide",
       "tutor_narrate",
       "tutor_observe",
@@ -147,6 +148,10 @@ test("the teaching loop reaches the model as prompt guidance", () => {
   assert.match(guidance, /tutor_observe with include_capture true/);
   assert.match(guidance, /tutor_guide with a region normalized to that window/);
   assert.match(guidance, /You cannot click/);
+  // Without the wait the model points once and stops, which is what made a
+  // lesson feel like a single instruction.
+  assert.match(guidance, /tutor_await_change, and wait there/);
+  assert.match(guidance, /never try to force it/);
   for (const entry of teach.agentPromptGuidance) {
     assert.ok(entry.surfaces.length > 0, "guidance must not carry an empty surface list");
   }
