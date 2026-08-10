@@ -319,13 +319,13 @@ private final class AccessibilityTutorEngine {
         let window = try liveWindow(for: payload)
         let requested = payload["timeout_seconds"]?.numberValue ?? 15
         let deadline = Date().addingTimeInterval(min(max(requested, 1), 25))
-        let threshold = min(max(payload["sensitivity"]?.numberValue ?? 0.02, 0.005), 0.5)
+        let threshold = min(max(payload["sensitivity"]?.numberValue ?? 0.012, 0.005), 0.5)
 
         let baseline = try await thumbprint(window.snapshot)
         var latest = baseline
         var difference = 0.0
         while Date() < deadline {
-            try await Task.sleep(nanoseconds: 400_000_000)
+            try await Task.sleep(nanoseconds: 150_000_000)
             // The learner switching away is not a change in the lesson's window,
             // and re-reading a window that is no longer there is meaningless.
             guard let focused = NSWorkspace.shared.frontmostApplication,

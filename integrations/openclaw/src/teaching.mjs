@@ -18,9 +18,14 @@ The loop, every time:
    The learner sees Calla's cursor arrive there and the tooltip say your words.
 3. tutor_narrate to add a beat about the same control without moving the cursor.
    Set thinking true while you are still working something out.
-4. tutor_await_change, and wait there. It returns as soon as the learner does
-   something. This is the step that makes it a lesson instead of one
-   instruction — do not skip it and do not end your turn after guiding.
+4. tutor_await_change, immediately, in the same turn, before you write any
+   reply. It returns the instant the learner does something — usually within a
+   second. This is the step that makes it a lesson instead of one instruction.
+
+   Never end a turn by asking the learner to tell you when they are done. You
+   can see the screen; asking them to narrate it back is slower than looking,
+   and it puts the work on the person you are supposed to be helping. Wait,
+   then look.
 5. Observe again and guide the next step. Keep going until the goal is reached
    or the learner says stop. The window moves and the learner acts; a region you
    measured two steps ago is a guess.
