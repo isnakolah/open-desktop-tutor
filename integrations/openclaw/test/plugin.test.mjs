@@ -172,6 +172,73 @@ test("protocol rejects coordinate-shaped authority", () => {
 });
 
 
+test("normalised vision hints are accepted only by point, and only within 0..1", () => {
+  const base = {
+    session_id: "session-1234",
+    semantic_target: "blender.ui.properties.modifiers_tab",
+    snapshot_id: "snapshot-1",
+  };
+  const hint = {description: "wrench icon", region: {x: 0.82, y: 0.2, width: 0.04, height: 0.03}};
+
+  // Accepted on point, and the raw-coordinate scan still runs on everything else.
+  const envelope = buildTutorEnvelope("tutor_point", {...base, target_hint: hint});
+  assert.deepEqual(envelope.payload.target_hint, hint);
+
+  // A hint can never authorise an action.
+  assert.throws(
+    () =>
+      buildTutorEnvelope("tutor_propose_action", {
+        ...base,
+        action: "click",
+        expected_state: {},
+        rationale: "open modifiers",
+        target_hint: hint,
+      }),
+    /only by tutor_point/,
+  );
+
+  // Pixel-shaped values masquerading as a hint are rejected.
+  for (const region of [
+    {x: 1420, y: 377, width: 24, height: 24},
+    {x: 0.5, y: 0.5, width: 0.9, height: 0.9},
+    {x: -0.1, y: 0.2, width: 0.1, height: 0.1},
+    {x: 0.1, y: 0.2, width: 0, height: 0.1},
+  ]) {
+    assert.throws(
+      () => buildTutorEnvelope("tutor_point", {...base, target_hint: {description: "d", region}}),
+      /target_hint\.region/,
+      `region should be rejected: ${JSON.stringify(region)}`,
+    );
+  }
+
+  // The exemption is scoped to target_hint; coordinates elsewhere still fail.
+  assert.throws(
+    () => buildTutorEnvelope("tutor_point", {...base, target_hint: hint, x: 847, y: 291}),
+    /raw coordinate field x is forbidden/,
+  );
+});
+
+test("authored target descriptors pass the coordinate rejector unchanged", () => {
+  const descriptor = {
+    semantic_id: "blender.ui.properties.modifiers_tab",
+    bundle_ids: ["org.blenderfoundation.blender"],
+    resolve: {
+      bridge: {selector: {editor_type: "PROPERTIES", context: "MODIFIER"}},
+      accessibility: {candidates: [{role: "AXRadioButton", label_regex: "(?i)modifier"}]},
+      visual: {icon: "wrench"},
+    },
+    disambiguate: {expected_neighbors: ["object_data", "particles"]},
+    minimum_confidence: {point: 0.72, act: 0.92},
+  };
+  const envelope = buildTutorEnvelope("tutor_point", {
+    session_id: "session-1234",
+    semantic_target: "blender.ui.properties.modifiers_tab",
+    snapshot_id: "snapshot-1",
+    target_descriptor: descriptor,
+  });
+  assert.deepEqual(envelope.payload.target_descriptor, descriptor);
+});
+
 test("optional owner gate and one-shot action approval are independent", async () => {
   const {api, registrations} = fakeApi({pluginConfig: {requireOwnerIdentity: true}});
   plugin.register(api);

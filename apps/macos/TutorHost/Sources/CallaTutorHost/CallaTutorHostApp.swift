@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import SwiftUI
 
 @main
@@ -38,6 +39,13 @@ struct CallaTutorHostApp: App {
 final class CallaAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        // Resolving targets and verifying lesson steps both read the
+        // Accessibility tree, so ask for the grant on first launch.
+        // kAXTrustedCheckOptionPrompt is an imported `var`, which Swift 6 treats
+        // as shared mutable state; its value is the documented constant string.
+        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+        let trusted = AXIsProcessTrustedWithOptions(options)
+        FileHandle.standardError.write("accessibility trusted: \(trusted)\n".data(using: .utf8)!)
         Task { await TutorHostController.shared.start() }
     }
 }

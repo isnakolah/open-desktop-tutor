@@ -5,6 +5,78 @@ const baseSessionProperty = {
   session_id: {type: "string", minLength: 8, description: "Opaque TutorHost teaching session id."},
 };
 
+const normalisedUnit = {type: "number", minimum: 0, maximum: 1};
+
+// A vision hint says where to look, never where to click. Every value is
+// normalised to the captured window, so it carries no pixel or screen
+// coordinate, and TutorHost re-resolves the real bounds itself.
+const targetHintProperty = {
+  target_hint: {
+    type: "object",
+    additionalProperties: false,
+    required: ["description", "region"],
+    description:
+      "Normalised search prior from a vision model. Never authorises an action; TutorHost re-resolves the target locally.",
+    properties: {
+      description: {type: "string", minLength: 1, maxLength: 200},
+      region: {
+        type: "object",
+        additionalProperties: false,
+        required: ["x", "y", "width", "height"],
+        properties: {x: normalisedUnit, y: normalisedUnit, width: normalisedUnit, height: normalisedUnit},
+      },
+    },
+  },
+};
+
+// The authored `resolve:` contract from the App Pack, forwarded verbatim so
+// TutorHost carries no application-specific code.
+const targetDescriptorProperty = {
+  target_descriptor: {
+    type: "object",
+    additionalProperties: false,
+    description: "Authored App Pack resolver contract for this semantic target.",
+    properties: {
+      semantic_id: {type: "string", minLength: 1, maxLength: 200},
+      bundle_ids: {type: "array", items: {type: "string", maxLength: 255}, maxItems: 16},
+      resolve: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          bridge: {type: "object"},
+          accessibility: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              candidates: {
+                type: "array",
+                maxItems: 16,
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    role: {type: "string", maxLength: 80},
+                    // Bounded: pack content is untrusted and this becomes a regex.
+                    label_regex: {type: "string", maxLength: 200},
+                    description_regex: {type: "string", maxLength: 200},
+                  },
+                },
+              },
+            },
+          },
+          visual: {type: "object"},
+        },
+      },
+      disambiguate: {type: "object"},
+      minimum_confidence: {
+        type: "object",
+        additionalProperties: false,
+        properties: {point: normalisedUnit, act: normalisedUnit},
+      },
+    },
+  },
+};
+
 const definitions = {
   tutor_observe: {
     label: "Tutor Observe",
@@ -55,9 +127,12 @@ const definitions = {
       required: ["session_id", "semantic_target", "snapshot_id"],
       properties: {
         ...baseSessionProperty,
+        ...targetDescriptorProperty,
+        ...targetHintProperty,
         semantic_target: {type: "string", minLength: 1},
         snapshot_id: {type: "string", minLength: 1},
         label: {type: "string", maxLength: 120},
+        step: {type: "string", maxLength: 60},
       },
     },
   },
@@ -70,6 +145,8 @@ const definitions = {
       required: ["session_id", "action", "semantic_target", "snapshot_id", "expected_state", "rationale"],
       properties: {
         ...baseSessionProperty,
+        // Deliberately no target_hint: a model hint can never authorise an action.
+        ...targetDescriptorProperty,
         action: {enum: ["move_cursor", "click", "scroll", "keyboard_shortcut", "type_text"]},
         semantic_target: {type: "string", minLength: 1},
         snapshot_id: {type: "string", minLength: 1},
