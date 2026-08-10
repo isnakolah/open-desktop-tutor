@@ -12,15 +12,19 @@ resolve:
   accessibility:
     candidates:
       - role: AXRadioButton
-        label_regex: "(?i)modifier"
+        label_matcher:
+          pattern: modifier
+          case_insensitive: true
       - role: AXButton
-        description_regex: "(?i)modifier"
+        description_matcher:
+          pattern: modifier
+          case_insensitive: true
   visual:
     icon: wrench
     relative_to: properties_editor.vertical_context_tabs
     constraints: [visible, enabled]
-disambiguate:
-  expected_neighbors: [object_data, particles]
+neighbor_constraints:
+  expected: [object_data, particles]
 minimum_confidence:
   point: 0.72
   act: 0.92

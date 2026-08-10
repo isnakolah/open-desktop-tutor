@@ -11,6 +11,8 @@ The server-side enroller binds the first pending node named `Calla Mac`.
 
 The native host listens only on
 `~/Library/Application Support/OpenDesktopTutor/tutor-host.sock`, with its
-directory mode `0700` and socket mode `0600`. It handles semantic observations,
-local overlays, local approval, one Blender 5.2 Modifier Properties action, and
-fresh verification. macOS Accessibility permission is required.
+directory mode `0700` and socket mode `0600`. Protocol v2 handles semantic
+observations, an explicitly requested in-memory JPEG of only the focused
+allowlisted window, pack-authored local overlays, point-only visual search
+priors, local approval, and fresh detector verification. macOS Accessibility
+permission is required; no capture is written to disk.

@@ -4,7 +4,7 @@ import path from "node:path";
 
 import {validateNodeEnvelope} from "./protocol.mjs";
 
-const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+const MAX_RESPONSE_BYTES = Math.floor(1.5 * 1024 * 1024);
 
 export class TutorHostUnavailableError extends Error {
   constructor(message, cause) {
@@ -45,7 +45,7 @@ export async function invokeTutorHost(envelope, options = {}) {
     client.on("data", (chunk) => {
       buffer = Buffer.concat([buffer, chunk]);
       if (buffer.length > MAX_RESPONSE_BYTES) {
-        finish(new Error("TutorHost local IPC response exceeded 2 MiB"));
+        finish(new Error("TutorHost local IPC response exceeded 1.5 MiB"));
         return;
       }
       const newline = buffer.indexOf(0x0a);

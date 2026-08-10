@@ -1,4 +1,4 @@
-import {findForbiddenCoordinatePath, TUTOR_TOOL_NAMES} from "./protocol.mjs";
+import {findForbiddenCoordinatePath, TUTOR_TOOL_NAMES, validateNormalizedTargetHint} from "./protocol.mjs";
 
 const TUTOR_TOOLS = new Set(TUTOR_TOOL_NAMES);
 
@@ -13,7 +13,18 @@ export function createBeforeToolCallPolicy(config) {
       };
     }
 
-    const coordinatePath = findForbiddenCoordinatePath(event.params);
+    if (event.toolName === "tutor_point" && event.params?.target_hint !== undefined) {
+      try {
+        validateNormalizedTargetHint(event.params.target_hint);
+      } catch (error) {
+        return {block: true, blockReason: error.message};
+      }
+    }
+    const coordinatePath = findForbiddenCoordinatePath(
+      event.params,
+      [],
+      event.toolName === "tutor_point" && event.params?.target_hint !== undefined,
+    );
     if (coordinatePath) {
       return {
         block: true,
@@ -22,9 +33,15 @@ export function createBeforeToolCallPolicy(config) {
     }
 
     if (event.toolName === "tutor_propose_action") {
+      if (Object.hasOwn(event.params || {}, "target_hint")) {
+        return {
+          block: true,
+          blockReason: "tutor_propose_action never accepts a model target_hint; local evidence is required.",
+        };
+      }
       const action = typeof event.params?.action === "string" ? event.params.action : "unknown";
       const target =
-        typeof event.params?.semantic_target === "string" ? event.params.semantic_target : "unknown target";
+        typeof event.params?.target_descriptor?.id === "string" ? event.params.target_descriptor.id : "unknown target";
       return {
         requireApproval: {
           title: `Tutor action: ${action}`,

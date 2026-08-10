@@ -73,6 +73,30 @@ class CallaToolTests(unittest.TestCase):
             self.assertFalse(prior_index.exists())
             self.assertEqual(result["removed_revisions"], 2)
 
+    def test_pack_store_rejects_an_invalid_compiled_descriptor(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "unsafe.otpack"
+            manifest = {
+                "format": "open-desktop-tutor-pack",
+                "format_version": 1,
+                "entity_count": 1,
+                "pack": {
+                    "id": "org.open-desktop-tutor.blender",
+                    "pack_version": "0.3.0",
+                    "apps": [{"platform": "macos", "bundle_ids": ["org.blenderfoundation.blender"], "versions": ">=5.2 <5.3", "locales": ["en"]}],
+                },
+            }
+            unsafe = {
+                "id": "blender.ui.unsafe", "kind": "ui_target", "title": "Unsafe", "source_file": "ui/unsafe.yaml",
+                "resolve": {"accessibility": {"candidates": [{"role": "AXButton", "label_matcher": {"pattern": "unsafe.*"}}]}},
+                "minimum_confidence": {"point": 0.7, "act": 0.9},
+            }
+            with zipfile.ZipFile(source, "w") as archive:
+                archive.writestr("manifest.json", json.dumps(manifest))
+                archive.writestr("entities.json", json.dumps([unsafe]))
+            with self.assertRaisesRegex(pack_store.PackStoreError, "invalid descriptor"):
+                pack_store.install_pack(source, Path(temporary_directory) / "calla")
+
     def test_gateway_patch_is_additive_and_records_ownership(self) -> None:
         patch, ownership = gateway_setup.build_gateway_patch(
             plugin_allow=["existing-plugin"],
