@@ -29,6 +29,29 @@ AGENT="${CALLA_AGENT:-calla}"
 # control in a screenshot is recognition, not reasoning.
 THINKING="${CALLA_THINKING:-low}"
 
+# Say so on screen before the request leaves. A turn takes tens of seconds, and
+# without this the learner asks from Raycast and watches nothing happen — the
+# tooltip only learns about it when the answer arrives.
+SOCKET="$HOME/Library/Application Support/OpenDesktopTutor/tutor-host.sock"
+if [[ -S "$SOCKET" ]]; then
+  /usr/bin/python3 - "$SOCKET" <<'THINKING' >/dev/null 2>&1 || true
+import json, socket, sys, uuid
+envelope = {
+    "protocol_version": 2,
+    "request_id": str(uuid.uuid4()),
+    "operation": "narrate",
+    "session_id": "calla-asking",
+    "payload": {"step": "Calla", "text": "Thinking…", "status": "Calla — thinking", "thinking": True},
+}
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(2)
+s.connect(sys.argv[1])
+s.sendall((json.dumps(envelope) + "\n").encode())
+s.recv(4096)
+s.close()
+THINKING
+fi
+
 QUOTED=$(printf '%s' "$MESSAGE" | sed "s/'/'\\\\''/g")
 REMOTE="export PATH=\$HOME/.npm-global/bin:\$PATH;
 nohup openclaw agent --agent $AGENT --session-id $SESSION --thinking $THINKING -m '$QUOTED' \

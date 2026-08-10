@@ -25,6 +25,7 @@
         "session_start",
         "observe",
         "retrieve",
+        "plan",
         "guide",
         "await_change",
         "narrate",

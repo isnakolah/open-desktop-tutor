@@ -12,6 +12,7 @@
     "tools": [
       "tutor_observe",
       "tutor_retrieve",
+      "tutor_plan",
       "tutor_guide",
       "tutor_await_change",
       "tutor_narrate",
@@ -83,6 +84,9 @@
       "risk": "low"
     },
     "tutor_await_change": {
+      "risk": "low"
+    },
+    "tutor_plan": {
       "risk": "low"
     }
   }

@@ -125,6 +125,7 @@ test("gateway role registers semantic tools and policy without a Mac node handle
       "tutor_guide",
       "tutor_narrate",
       "tutor_observe",
+      "tutor_plan",
       "tutor_point",
       "tutor_propose_action",
       "tutor_retrieve",
@@ -172,6 +173,9 @@ test("the teaching loop reaches the model as prompt guidance", () => {
   // Every extra tool call is a round trip the learner sits through.
   assert.match(guidance, /Every step after that costs\s+one/);
   assert.match(guidance, /next_observation/);
+  // A route the learner can see, and one the model is allowed to revise.
+  assert.match(guidance, /call tutor_plan with the whole route/);
+  assert.match(guidance, /what you expect, not a contract/);
   assert.match(guidance, /never try to force it/);
   for (const entry of teach.agentPromptGuidance) {
     assert.ok(entry.surfaces.length > 0, "guidance must not carry an empty surface list");

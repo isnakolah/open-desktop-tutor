@@ -75,6 +75,35 @@ const definitions = {
       },
     },
   },
+  tutor_plan: {
+    label: "Tutor Plan",
+    description: [
+      "Lay out the whole route before you start pointing, then keep it current.",
+      "The learner sees the steps listed in the tooltip with the current one lit,",
+      "so they know how far in they are and what is coming instead of being handed",
+      "one instruction at a time.",
+      "",
+      "Short titles, a few words each — \"Delete the cube\", not a sentence. This is",
+      "provisional: when the screen turns out differently from what you expected,",
+      "call it again with a corrected list rather than forcing the old one.",
+    ].join(" "),
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["session_id", "steps"],
+      properties: {
+        ...baseSessionProperty,
+        steps: {
+          type: "array",
+          minItems: 2,
+          maxItems: 12,
+          items: {type: "string", minLength: 1, maxLength: 60},
+          description: "Short titles for each step, in order.",
+        },
+        index: {type: "integer", minimum: 0, description: "Which step the lesson is on now."},
+      },
+    },
+  },
   tutor_guide: {
     label: "Tutor Guide",
     description: [
@@ -114,6 +143,7 @@ const definitions = {
         step: {type: "string", maxLength: 60, description: "Short progress label, for example \"Step 2 of 4\"."},
         text: {type: "string", minLength: 1, maxLength: 240, description: "One instruction, in the learner's words."},
         status: {type: "string", maxLength: 80},
+        step_index: {type: "integer", minimum: 0, description: "Which planned step this is, so the list keeps up."},
         wait_for_change: {
           type: "boolean",
           default: true,

@@ -10,6 +10,7 @@ export const CALLA_ROLES = Object.freeze(["gateway", "node", "both"]);
 export const TUTOR_TOOL_NAMES = Object.freeze([
   "tutor_observe",
   "tutor_retrieve",
+  "tutor_plan",
   "tutor_guide",
   "tutor_await_change",
   "tutor_narrate",
@@ -21,6 +22,7 @@ export const TUTOR_TOOL_NAMES = Object.freeze([
 const TOOL_TO_OPERATION = Object.freeze({
   tutor_observe: "observe",
   tutor_retrieve: "retrieve",
+  tutor_plan: "plan",
   tutor_guide: "guide",
   tutor_await_change: "await_change",
   tutor_narrate: "narrate",
@@ -126,6 +128,11 @@ export function validateToolPayload(toolName, payload) {
     requireString(payload.text, "text");
     if (Object.hasOwn(payload, "target_descriptor")) {
       throw new TypeError("tutor_guide never carries a descriptor; it points at what the model saw in the capture");
+    }
+  }
+  if (toolName === "tutor_plan") {
+    if (!Array.isArray(payload.steps) || payload.steps.length < 2) {
+      throw new TypeError("tutor_plan needs at least two steps; a one-step lesson does not need a plan");
     }
   }
   if (toolName === "tutor_await_change") {

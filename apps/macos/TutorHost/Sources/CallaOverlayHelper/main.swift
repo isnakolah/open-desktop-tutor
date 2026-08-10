@@ -17,6 +17,7 @@ import SwiftUI
 //   {"cmd":"point","x":123,"y":456,"window":{"x":0,"y":0,"width":1,"height":1},
 //    "owner":"com.example.app","step":"Step 1 of 2","text":"...","status":"..."}
 //   {"cmd":"narrate","step":"Step 1 of 2","text":"...","status":"...","thinking":true}
+//   {"cmd":"plan","steps":["Delete the cube","Add a torus"],"index":0}
 //   {"cmd":"locate"}
 //   {"cmd":"hide"}
 //   {"cmd":"quit"}
@@ -102,13 +103,21 @@ struct CallaCursor: View {
 
     let size: CGFloat
     let thinking: Bool
-    @State private var phase: CGFloat = 0
+    @State private var pulse: CGFloat = 0
 
     private var join: CGFloat {
         CallaPointerShape.cornerRadius * 2 * size / CallaPointerShape.viewBox
     }
 
     var body: some View {
+        ZStack(alignment: .topLeading) {
+            if thinking { halo }
+            pointer
+        }
+        .frame(width: Self.maxSize + 22, height: Self.maxSize + 22, alignment: .topLeading)
+    }
+
+    private var pointer: some View {
         ZStack {
             // A white halo under the fill, so the pointer separates from dark
             // and light interfaces alike without an outline that reads as chrome.
@@ -121,20 +130,33 @@ struct CallaCursor: View {
         }
         .shadow(color: .black.opacity(0.4), radius: 3, x: 0, y: 1)
         .frame(width: size, height: size, alignment: .topLeading)
-        // Pinned to the panel's top-left so the tip stays on the hotspot
-        // whatever size the artwork is drawn at.
         .frame(width: Self.maxSize, height: Self.maxSize, alignment: .topLeading)
-        // Thinking reads as a small, organic tilt rather than a spinner.
-        .rotationEffect(.degrees(thinking ? Double(sin(phase) * 6) : 0),
-                        anchor: UnitPoint(x: CallaPointerShape.tip.x / CallaPointerShape.viewBox,
-                                          y: CallaPointerShape.tip.y / CallaPointerShape.viewBox))
-        .offset(x: thinking ? sin(phase * 1.3) * 1.6 : 0,
-                y: thinking ? cos(phase * 0.9) * 1.2 : 0)
-        .onAppear {
-            withAnimation(.linear(duration: 2.4).repeatForever(autoreverses: false)) {
-                phase = .pi * 4
+    }
+
+    /// Waiting has to look like waiting.
+    ///
+    /// A tilt of a few degrees was too subtle to read as anything, so a request
+    /// in flight now shows a ring expanding out of the pointer's tip — the same
+    /// language as a pulse, which people already read as "working". It is
+    /// anchored on the tip so it never suggests the pointer has moved.
+    private var halo: some View {
+        ZStack {
+            ForEach(0..<2, id: \.self) { index in
+                Circle()
+                    .stroke(Self.gradient, lineWidth: 2)
+                    .frame(width: 26, height: 26)
+                    .scaleEffect(0.45 + pulse * 1.15)
+                    .opacity((1 - pulse) * 0.8)
+                    .animation(
+                        .easeOut(duration: 1.1)
+                            .repeatForever(autoreverses: false)
+                            .delay(Double(index) * 0.55),
+                        value: pulse)
             }
         }
+        .offset(x: CallaPointerShape.tip.x / CallaPointerShape.viewBox * size - 13,
+                y: CallaPointerShape.tip.y / CallaPointerShape.viewBox * size - 13)
+        .onAppear { pulse = 1 }
     }
 }
 
@@ -151,6 +173,11 @@ struct CallaTooltip: View {
     let step: String
     let text: String
     let thinking: Bool
+    /// The route the model laid out up front, and where the lesson is in it.
+    /// Provisional by design — the model re-issues it when the screen turns out
+    /// differently, so this is what it expects, not a contract.
+    var plan: [String] = []
+    var planIndex: Int = 0
     /// Bumped by the ⌥⌘/ shortcut to open the question field.
     var startAsking: Int = 0
     var onEvent: ((String, String) -> Void)?
@@ -167,16 +194,16 @@ struct CallaTooltip: View {
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
-                if thinking {
-                    Text("thinking")
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .foregroundStyle(.tertiary)
-                }
+                if thinking { WaitingDots(accent: accent) }
             }
             Text(text)
                 .font(.system(size: 13))
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
+            // The whole route, not just the next thing. Being handed one
+            // instruction at a time with no shape to it gives the learner no
+            // idea how far in they are or how much is left.
+            if plan.count > 1 { flow }
             if onEvent != nil { controls }
         }
         .padding(.horizontal, 14)
@@ -217,6 +244,35 @@ struct CallaTooltip: View {
         }
     }
 
+    /// Done steps struck through, the current one lit, the rest waiting. Capped
+    /// so a long lesson does not grow a tooltip taller than what it explains.
+    private var flow: some View {
+        let window = Self.visibleWindow(count: plan.count, index: planIndex)
+        return VStack(alignment: .leading, spacing: 3) {
+            Divider().padding(.vertical, 1)
+            ForEach(window, id: \.self) { index in
+                HStack(spacing: 6) {
+                    Image(systemName: index < planIndex ? "checkmark.circle.fill"
+                                                        : index == planIndex ? "circle.inset.filled" : "circle")
+                        .font(.system(size: 9))
+                        .foregroundStyle(index == planIndex ? AnyShapeStyle(accent) : AnyShapeStyle(.tertiary))
+                    Text(plan[index])
+                        .font(.system(size: 11, weight: index == planIndex ? .medium : .regular))
+                        .foregroundStyle(index == planIndex ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                        .strikethrough(index < planIndex, color: .secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+    }
+
+    /// At most five rows, centred on where the lesson is.
+    static func visibleWindow(count: Int, index: Int) -> [Int] {
+        guard count > 5 else { return Array(0..<count) }
+        let start = min(max(index - 2, 0), count - 5)
+        return Array(start..<(start + 5))
+    }
+
     private func send() {
         let trimmed = question.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
@@ -242,6 +298,29 @@ struct CallaTooltip: View {
             .overlay(Capsule().strokeBorder(accent.opacity(0.35), lineWidth: 0.5))
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// Three dots that actually move, because "thinking" as static text reads as a
+/// label rather than as something in progress.
+struct WaitingDots: View {
+    let accent: Color
+    @State private var phase = 0.0
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(0..<3, id: \.self) { index in
+                Circle()
+                    .fill(accent)
+                    .frame(width: 4, height: 4)
+                    .opacity(0.35 + 0.65 * abs(sin(phase + Double(index) * 0.7)))
+            }
+        }
+        .onAppear {
+            withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) {
+                phase = .pi * 2
+            }
+        }
     }
 }
 
@@ -312,8 +391,17 @@ final class CallaOverlay {
     private var askingRequested = 0
     private var currentStep = ""
     private var currentText = ""
-    /// Tall enough for two lines and the control row beneath them.
-    private let tooltipHeight: CGFloat = 148
+    /// The whole route, laid out before the first step. Held so the tooltip can
+    /// say which step this is and what follows, without the model having to
+    /// repeat itself every call.
+    private var plan: [String] = []
+    private var planIndex = 0
+    /// Tall enough for two lines and the control row, plus a row per visible
+    /// step once there is a plan to show.
+    private var tooltipHeight: CGFloat {
+        let rows = CallaTooltip.visibleWindow(count: plan.count, index: planIndex).count
+        return 148 + (plan.count > 1 ? CGFloat(rows) * 17 + 10 : 0)
+    }
 
     /// The learner pressed something in the tooltip. The host is listening on
     /// this process's stdout, because it owns the connection to Calla.
@@ -338,7 +426,8 @@ final class CallaOverlay {
         CGPoint(x: CallaPointerShape.tip.x / CallaPointerShape.viewBox * cursorPointSize,
                 y: CallaPointerShape.tip.y / CallaPointerShape.viewBox * cursorPointSize)
     }
-    private static let cursorSize = CGSize(width: CallaCursor.maxSize, height: CallaCursor.maxSize)
+    /// Room for the pointer plus the thinking pulse around its tip.
+    private static let cursorSize = CGSize(width: CallaCursor.maxSize + 22, height: CallaCursor.maxSize + 22)
 
     /// Panel origin that places the pointer's tip exactly on `point`.
     private func cursorOrigin(for point: CGPoint) -> CGPoint {
@@ -677,13 +766,41 @@ final class CallaOverlay {
         tooltip?.setFrameOrigin(tooltipFrame(for: point).origin)
     }
 
+    /// Take the route the model worked out up front.
+    func setPlan(_ steps: [String], index: Int) {
+        plan = steps
+        planIndex = max(0, min(index, max(steps.count - 1, 0)))
+        setThinking(thinking, step: currentStep, text: currentText)
+        // The panel has to grow to hold the list; do it where the plan changes,
+        // never on a timer, so no feedback loop can form.
+        if let anchor = lastPoint { tooltip?.setFrame(tooltipFrame(for: anchor), display: true) }
+    }
+
+    /// Where the lesson is in that route: "Step 2 of 5" beats a bare label,
+    /// because it tells the learner how much is left.
+    private var progressLabel: String {
+        guard plan.count > 1 else { return currentStep }
+        return "Step \(planIndex + 1) of \(plan.count)"
+    }
+
+    private var upcomingStep: String? {
+        guard planIndex + 1 < plan.count else { return nil }
+        return plan[planIndex + 1]
+    }
+
+    func advancePlan(to index: Int?) {
+        guard let index, !plan.isEmpty else { return }
+        planIndex = max(0, min(index, plan.count - 1))
+    }
+
     func setThinking(_ value: Bool, step: String, text: String) {
         thinking = value
         currentStep = step
         currentText = text
         cursor?.contentView = NSHostingView(rootView: CallaCursor(size: cursorPointSize, thinking: value))
         tooltip?.contentView = NSHostingView(rootView:
-            CallaTooltip(accent: accent, step: step, text: text, thinking: value,
+            CallaTooltip(accent: accent, step: plan.count > 1 ? progressLabel : step,
+                         text: text, thinking: value, plan: plan, planIndex: planIndex,
                          startAsking: askingRequested, onEvent: Self.emit))
     }
 
@@ -811,6 +928,8 @@ struct Command: Decodable {
     let window: WindowRect?
     let owner: String?
     let hide_on_hover: Bool?
+    let steps: [String]?
+    let index: Int?
     let cursor_size: Int?
     let show_hud: Bool?
     let step: String?
@@ -932,6 +1051,7 @@ Thread.detachNewThread {
                 switch command.cmd {
                 case "point":
                     guard let x = command.x, let y = command.y else { return }
+                    CallaOverlay.shared.advancePlan(to: command.index)
                     CallaOverlay.shared.setHideOnHover(command.hide_on_hover ?? true)
                     CallaOverlay.shared.apply(cursorSize: command.cursor_size.map(CGFloat.init),
                                               showHUD: command.show_hud)
@@ -940,6 +1060,8 @@ Thread.detachNewThread {
                                         step: command.step ?? "Calla",
                                         text: command.text ?? "",
                                         status: command.status ?? "Calla")
+                case "plan":
+                    CallaOverlay.shared.setPlan(command.steps ?? [], index: command.index ?? 0)
                 case "locate":
                     CallaOverlay.shared.locate()
                 case "narrate":

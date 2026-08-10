@@ -107,5 +107,14 @@ tested against something the behaviour changed, so acting on the answer changed
 the answer, and the tooltip shook or ping-ponged. Hiding moves and resizes
 nothing, so it cannot recur.
 
+A lesson shows its whole route: `tutor_plan` hands the Mac the steps up front
+and the tooltip lists them, done ones struck through, the current one lit. It is
+provisional — the model re-issues it when the screen turns out differently — so
+the learner can see where this is going without the plan becoming a script.
+
+Waiting looks like waiting: a ring pulses out of the pointer's tip and the
+tooltip shows moving dots while a request is in flight, including one asked for
+from Raycast, which tells the Mac before the request leaves.
+
 **Find it** in the menu bar pulses the pointer and tooltip where they already
 are, for a lesson lost on a large display.

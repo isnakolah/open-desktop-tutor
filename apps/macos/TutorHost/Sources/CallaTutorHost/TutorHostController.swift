@@ -141,6 +141,7 @@ final class TutorHostController: ObservableObject {
             case "observe": payload = try await engine.observe(request.payload)
             case "guide": payload = try await engine.guide(request.payload)
             case "await_change": payload = try await engine.awaitChange(request.payload)
+            case "plan": payload = engine.plan(request.payload)
             case "narrate": payload = engine.narrate(request.payload)
             case "point": payload = try engine.point(request.payload)
             case "propose_action": payload = try await proposeAction(request.payload)
@@ -321,8 +322,10 @@ private final class AccessibilityTutorEngine {
         let step = payload["step"]?.stringValue ?? "Calla"
         let text = payload["text"]?.stringValue ?? ""
         let status = payload["status"]?.stringValue ?? "Calla — \(step)"
+        let stepIndex = payload["step_index"]?.numberValue.map { Int($0) }
         PointerOverlay.shared.point(at: frame, window: window.frame, owner: window.snapshot.appBundleID,
-                                    step: step, text: String(text.prefix(240)), status: status)
+                                    step: step, text: String(text.prefix(240)), status: status,
+                                    stepIndex: stepIndex)
         return [
             "status": .string("ok"),
             "guide_receipt": .object([
@@ -384,6 +387,22 @@ private final class AccessibilityTutorEngine {
         } catch {
             throw TutorHostFailure(code: "capture_failed", message: "The focused allowlisted window could not be read")
         }
+    }
+
+    /// Take the route the model worked out before it starts pointing.
+    ///
+    /// Held on this Mac so the tooltip can show where the lesson is and what
+    /// follows without the model spending a round trip repeating itself. It is
+    /// provisional: the model re-issues it whenever the screen turns out
+    /// differently from what it expected.
+    func plan(_ payload: [String: JSONValue]) -> [String: JSONValue] {
+        guard case .array(let raw)? = payload["steps"] else {
+            return ["status": .string("ok"), "steps": .number(0)]
+        }
+        let steps = Array(raw.compactMap { $0.stringValue }.filter { !$0.isEmpty }.prefix(12))
+        let index = Int(payload["index"]?.numberValue ?? 0)
+        PointerOverlay.shared.plan(steps: steps, index: index)
+        return ["status": .string("ok"), "steps": .number(Double(steps.count))]
     }
 
     /// Re-word the tooltip without moving the cursor, so the model can keep
@@ -1024,7 +1043,8 @@ final class PointerOverlay {
     /// the taught application's overlay: the tooltip is kept inside that
     /// window's bounds, and the whole overlay hides whenever the learner is
     /// looking at something else.
-    func point(at frame: CGRect, window: CGRect, owner: String, step: String, text: String, status: String) {
+    func point(at frame: CGRect, window: CGRect, owner: String, step: String, text: String,
+               status: String, stepIndex: Int? = nil) {
         send(["cmd": "point", "x": frame.midX, "y": frame.midY,
               "window": ["x": window.minX, "y": window.minY,
                          "width": window.width, "height": window.height],
@@ -1032,13 +1052,19 @@ final class PointerOverlay {
               "hide_on_hover": TutorSettings.shared.hideTooltipOnHover,
               "cursor_size": TutorSettings.shared.cursorSize,
               "show_hud": TutorSettings.shared.showStatusHUD,
-              "step": step, "text": text, "status": status])
+              "step": step, "text": text, "status": status, "index": stepIndex ?? -1])
     }
 
     /// Re-word the tooltip in place. The cursor stays where the last step put
     /// it, so a lesson can narrate several beats about one control.
     func narrate(step: String, text: String, status: String, thinking: Bool) {
         send(["cmd": "narrate", "step": step, "text": text, "status": status, "thinking": thinking])
+    }
+
+    /// Hand the overlay the route the model worked out before starting, so the
+    /// tooltip can show progress and what is coming next.
+    func plan(steps: [String], index: Int) {
+        send(["cmd": "plan", "steps": steps, "index": index])
     }
 
     /// Pulse the pointer and tooltip where they already are, for a learner who
