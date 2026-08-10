@@ -25,8 +25,14 @@ Its colour is the status, so the state is legible without opening anything:
 | --- | --- |
 | green | ready to teach |
 | blue | a lesson is running |
-| orange | something needs you — permission, connection, or no application allowed |
+| orange | working on it, or a permission is missing |
+| red | stuck — it has stopped getting anywhere |
 | grey | teaching is paused |
+
+Orange and red are deliberately different. A reconnect that resolves in a second
+should not look like a failure, and "Reconnecting…" that never resolves is a lie
+the learner has no way to see through, so after thirty seconds the status says
+it cannot reach Calla and names what is likely in the way.
 
 It is drawn as a tinted, non-template image on purpose. A template image is
 recoloured by the system to match the menu bar, which is right for a plain icon

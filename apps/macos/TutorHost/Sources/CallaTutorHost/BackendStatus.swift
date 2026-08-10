@@ -22,6 +22,18 @@ final class BackendStatus: ObservableObject {
     static let shared = BackendStatus()
 
     @Published private(set) var link: Link = .unknown
+    /// When the link stopped being healthy, so a blip can be told from a
+    /// failure. "Reconnecting…" that never resolves is a lie the learner has no
+    /// way to see through.
+    @Published private(set) var unhealthySince: Date?
+
+    /// Long enough that an ordinary reconnect never trips it.
+    private let stuckAfter: TimeInterval = 30
+
+    var isStuck: Bool {
+        guard let unhealthySince else { return false }
+        return Date().timeIntervalSince(unhealthySince) >= stuckAfter
+    }
     /// When the Gateway last sent this host anything at all.
     @Published private(set) var lastRequestAt: Date?
     /// The operation in that request, so "connected but idle" is legible.
@@ -47,7 +59,13 @@ final class BackendStatus: ObservableObject {
     }
 
     func refresh() {
-        link = readLink()
+        let next = readLink()
+        if next.isHealthy {
+            unhealthySince = nil
+        } else if unhealthySince == nil {
+            unhealthySince = Date()
+        }
+        link = next
     }
 
     /// The node agent's log is the only place its connection state is visible,

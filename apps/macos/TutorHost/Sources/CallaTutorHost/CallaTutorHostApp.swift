@@ -8,11 +8,13 @@ struct CallaTutorHostApp: App {
     @StateObject private var settings = TutorSettings.shared
     @NSApplicationDelegateAdaptor(CallaAppDelegate.self) private var appDelegate
 
-    /// Green ready · blue teaching · orange needs something · grey paused.
+    /// Green ready · blue teaching · orange working on it · red stuck · grey paused.
     private var statusTint: NSColor {
         if !host.captureActive { return .secondaryLabelColor }
         if !settings.screenRecordingGranted { return .systemOrange }
-        if case .connected = BackendStatus.shared.link {} else { return .systemOrange }
+        if case .connected = BackendStatus.shared.link {} else {
+            return BackendStatus.shared.isStuck ? .systemRed : .systemOrange
+        }
         if settings.allowedBundleIDs.isEmpty { return .systemOrange }
         return host.lessonActive ? .systemBlue : .systemGreen
     }

@@ -31,7 +31,7 @@ struct CallaMenu: View {
         if !host.captureActive { return .paused }
         if !settings.screenRecordingGranted { return .needsScreenRecording }
         if case .connected = backend.link {} else {
-            return .disconnected(CallaMenu.linkSummary(backend.link))
+            return .disconnected(CallaMenu.linkSummary(backend.link, stuck: backend.isStuck))
         }
         if settings.allowedBundleIDs.isEmpty { return .noApplications }
         return .ready(subject.lastSubjectName ?? settings.displayName(for: settings.allowedBundleIDs[0]))
@@ -121,16 +121,19 @@ struct CallaMenu: View {
         switch readiness {
         case .ready: return .green
         case .paused: return .secondary
+        // Red is reserved for stuck. Orange means Calla is working on it or
+        // needs a permission; red means it has stopped getting anywhere.
+        case .disconnected: return backend.isStuck ? .red : .orange
         default: return .orange
         }
     }
 
-    private static func linkSummary(_ link: BackendStatus.Link) -> String {
+    private static func linkSummary(_ link: BackendStatus.Link, stuck: Bool) -> String {
         switch link {
         case .connected: return "Connected"
-        case .disconnected: return "Reconnecting to Calla…"
         case .agentNotRunning: return "Calla's node agent is not running"
-        case .unknown: return "Not connected yet"
+        case .disconnected: return stuck ? "Can't reach Calla" : "Reconnecting to Calla…"
+        case .unknown: return stuck ? "Can't reach Calla" : "Connecting to Calla…"
         }
     }
 
@@ -146,7 +149,9 @@ struct CallaMenu: View {
         case .disconnected(let why):
             card(icon: "antenna.radiowaves.left.and.right.slash",
                  title: why,
-                 detail: "Calla retries on its own.",
+                 detail: backend.isStuck
+                     ? "It has been retrying for a while, so something is in the way — the tailnet, the Gateway being down, or an approval it is waiting on."
+                     : "Calla retries on its own.",
                  action: ("Logs", { settings.openLogs() }))
         case .noApplications:
             card(icon: "square.dashed",
