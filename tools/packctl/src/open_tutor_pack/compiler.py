@@ -12,6 +12,8 @@ from typing import Any, Iterable
 import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 
+from .descriptors import DescriptorError, reject_coordinate_fields, validate_detector, validate_ui_target
+
 
 ENTITY_KIND_BY_DIRECTORY = {
     "concepts": "concept",
@@ -24,7 +26,6 @@ ENTITY_KIND_BY_DIRECTORY = {
     "recovery": "recovery",
 }
 
-RAW_COORDINATE_KEYS = {"coordinate", "coordinates", "screen_x", "screen_y"}
 INDEXABLE_SUFFIXES = {".yaml", ".yml", ".json", ".md"}
 FIXED_ZIP_TIME = (2026, 1, 1, 0, 0, 0)
 
@@ -180,17 +181,18 @@ def _semantic_errors(
             if source_ref not in source_ids:
                 errors.append(f"{pack_path / source_file}: unknown source_ref {source_ref!r}")
 
-        for location, value in _walk(entity):
-            key = location[-1] if location else ""
-            if key in RAW_COORDINATE_KEYS:
-                errors.append(
-                    f"{pack_path / source_file}: raw coordinate field {'.'.join(location)!r} is forbidden; "
-                    "use a semantic target id"
-                )
-            if key in {"x", "y"} and "resolve" not in location and "visual" not in location:
-                errors.append(
-                    f"{pack_path / source_file}: bare {key!r} field outside visual resolver metadata is forbidden"
-                )
+        try:
+            reject_coordinate_fields(entity, str(pack_path / source_file))
+        except DescriptorError as exc:
+            errors.append(str(exc))
+
+        try:
+            if entity.get("kind") == "ui_target":
+                validate_ui_target({key: value for key, value in entity.items() if not key.startswith("_")}, str(pack_path / source_file))
+            elif entity.get("kind") == "detector":
+                validate_detector({key: value for key, value in entity.items() if not key.startswith("_")}, str(pack_path / source_file))
+        except DescriptorError as exc:
+            errors.append(str(exc))
 
     def require_reference(owner: dict[str, Any], ref: Any, expected_kind: str, field: str) -> None:
         if not isinstance(ref, str):
@@ -212,6 +214,8 @@ def _semantic_errors(
                 require_reference(entity, value, "ui_target", ".".join(location))
             elif key == "detector":
                 require_reference(entity, value, "detector", ".".join(location))
+            elif key == "target" and entity.get("kind") == "detector":
+                require_reference(entity, value, "ui_target", ".".join(location))
             elif key == "concept_refs" and isinstance(value, list):
                 for ref in value:
                     require_reference(entity, ref, "concept", ".".join(location))

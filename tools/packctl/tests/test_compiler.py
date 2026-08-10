@@ -36,6 +36,11 @@ class PackCompilerTests(unittest.TestCase):
                 )
                 manifest = json.loads(archive.read("manifest.json"))
                 self.assertEqual(manifest["entity_count"], result.entity_count)
+                entities = json.loads(archive.read("entities.json"))
+                descriptor = next(item for item in entities if item["id"] == "blender.ui.properties.modifiers_tab")
+                self.assertEqual(descriptor["resolve"]["visual"]["icon"], "wrench")
+                self.assertEqual(descriptor["minimum_confidence"], {"point": 0.72, "act": 0.92})
+                self.assertEqual(descriptor["source_file"], "ui/modifiers_tab.yaml")
 
             matches = search_pack(output, "bevel", limit=10)
             self.assertTrue(matches)
@@ -64,7 +69,45 @@ class PackCompilerTests(unittest.TestCase):
                 "  coordinates: [847, 291]\n",
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(PackError, "raw coordinate field"):
+            with self.assertRaisesRegex(PackError, "coordinate-bearing fields"):
+                validate_pack(pack)
+
+    def test_unsafe_or_oversized_matchers_fail_closed(self) -> None:
+        with self._pack_copy() as pack:
+            target = pack / "ui" / "modifiers_tab.yaml"
+            target.write_text(
+                target.read_text(encoding="utf-8").replace("pattern: modifier", "pattern: 'modifier.*'"),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(PackError, "forbidden regex operator"):
+                validate_pack(pack)
+
+        with self._pack_copy() as pack:
+            target = pack / "ui" / "modifiers_tab.yaml"
+            target.write_text(
+                target.read_text(encoding="utf-8").replace("pattern: modifier", f"pattern: {'m' * 129}"),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(PackError, "128 bytes"):
+                validate_pack(pack)
+
+    def test_invalid_descriptor_confidence_and_coordinates_fail_closed(self) -> None:
+        with self._pack_copy() as pack:
+            target = pack / "ui" / "modifiers_tab.yaml"
+            target.write_text(
+                target.read_text(encoding="utf-8").replace("point: 0.72", "point: 1.2"),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(PackError, "minimum_confidence.point"):
+                validate_pack(pack)
+
+        with self._pack_copy() as pack:
+            target = pack / "ui" / "modifiers_tab.yaml"
+            target.write_text(
+                target.read_text(encoding="utf-8").replace("icon: wrench", "icon: wrench\n    left: 0.1"),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(PackError, "coordinate-bearing fields"):
                 validate_pack(pack)
 
     def test_unknown_semantic_target_fails(self) -> None:

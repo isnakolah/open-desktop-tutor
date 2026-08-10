@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import {canonicalJSONString, validateDetectorDescriptor, validateTargetDescriptor} from "./descriptors.mjs";
+
 const INDEX_FORMAT = "calla-local-pack-index";
 
 function versionParts(version) {
@@ -81,6 +83,10 @@ function scoreEntity(entity, terms) {
   return score;
 }
 
+export async function readInstalledPackIndexes(config) {
+  return readIndexes(path.join(config.stateDirectory, "indexes"));
+}
+
 async function readIndexes(indexDirectory) {
   let names;
   try {
@@ -94,9 +100,13 @@ async function readIndexes(indexDirectory) {
     if (!name.endsWith(".json")) continue;
     try {
       const value = JSON.parse(await fs.readFile(path.join(indexDirectory, name), "utf8"));
-      if (value?.format === INDEX_FORMAT && value.format_version === 1) indexes.push(value);
-    } catch {
-      // A malformed local index is ignored so one damaged pack cannot block teaching.
+      if (value?.format !== INDEX_FORMAT || value.format_version !== 1 || !value.pack || !Array.isArray(value.entities)) {
+        throw new TypeError(`installed App-Pack index ${name} has an unsupported structure`);
+      }
+      indexes.push(value);
+    } catch (error) {
+      if (error instanceof TypeError) throw error;
+      throw new TypeError(`installed App-Pack index ${name} is malformed`);
     }
   }
   return indexes;
@@ -112,7 +122,7 @@ export async function retrieveLocalPacks(config, payload) {
   if (!terms.length) throw new TypeError("tutor_retrieve query contains no searchable terms");
 
   const matches = [];
-  for (const index of await readIndexes(path.join(config.stateDirectory, "indexes"))) {
+  for (const index of await readInstalledPackIndexes(config)) {
     if (!supportsApplication(index.pack, application)) continue;
     for (const entity of index.entities || []) {
       if (!entity || typeof entity !== "object") continue;
@@ -120,6 +130,14 @@ export async function retrieveLocalPacks(config, payload) {
       if (typeof entity.app_versions === "string" && !versionMatchesRange(application.version, entity.app_versions)) continue;
       const score = scoreEntity(entity, terms);
       if (score === null) continue;
+      let descriptor = null;
+      try {
+        if (entity.kind === "ui_target") descriptor = validateTargetDescriptor(entity, `installed entity ${entity.id}`);
+        if (entity.kind === "detector") descriptor = validateDetectorDescriptor(entity, `installed entity ${entity.id}`);
+      } catch {
+        // A manually damaged index must not make an invalid descriptor retrievable.
+        continue;
+      }
       matches.push({
         pack_id: index.pack.id,
         pack_version: index.pack.pack_version,
@@ -129,6 +147,8 @@ export async function retrieveLocalPacks(config, payload) {
         source_file: entity.source_file,
         score,
         entity,
+        ...(entity.kind === "ui_target" ? {target_descriptor: descriptor} : {}),
+        ...(entity.kind === "detector" ? {detector_descriptor: descriptor} : {}),
       });
     }
   }
@@ -139,4 +159,42 @@ export async function retrieveLocalPacks(config, payload) {
     application,
     results: matches.slice(0, limit),
   };
+}
+
+export async function requireCanonicalDescriptor(config, supplied, kind, name) {
+  const validate = kind === "ui_target" ? validateTargetDescriptor : validateDetectorDescriptor;
+  validate(supplied, name);
+  const suppliedJSON = canonicalJSONString(supplied);
+  const matches = [];
+  for (const index of await readInstalledPackIndexes(config)) {
+    for (const entity of index.entities || []) {
+      if (!entity || typeof entity !== "object" || entity.kind !== kind) continue;
+      try {
+        validate(entity, `installed entity ${entity.id || "unknown"}`);
+        if (canonicalJSONString(entity) === suppliedJSON) matches.push(entity);
+      } catch {
+        // Invalid installed records are not eligible authority.
+      }
+    }
+  }
+  if (matches.length !== 1) {
+    throw new TypeError(`${name} must be byte-for-byte equivalent to exactly one installed App-Pack ${kind}`);
+  }
+  return matches[0];
+}
+
+export async function requirePackAuthorizedAction(config, action, target, detector) {
+  let authorized = false;
+  for (const index of await readInstalledPackIndexes(config)) {
+    for (const lesson of index.entities || []) {
+      if (lesson?.kind !== "lesson" || !Array.isArray(lesson.steps)) continue;
+      for (const step of lesson.steps) {
+        if (!step || step.target !== target.id || step?.success?.detector !== detector.id) continue;
+        if (Array.isArray(step.allowed_assistance) && step.allowed_assistance.some((entry) => entry?.action === action && entry?.target === target.id)) {
+          authorized = true;
+        }
+      }
+    }
+  }
+  if (!authorized) throw new TypeError("the installed App Pack does not authorize this action and expected-state pair");
 }

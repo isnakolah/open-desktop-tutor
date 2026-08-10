@@ -13,9 +13,13 @@ resolve:
   accessibility:
     candidates:
       - role: AXButton
-        label_regex: "(?i)add modifier"
+        label_matcher:
+          pattern: "add modifier"
+          case_insensitive: true
   visual:
-    text_regex: "(?i)add modifier"
+    text_matcher:
+      pattern: "add modifier"
+      case_insensitive: true
     constraints: [visible, enabled]
 minimum_confidence:
   point: 0.75

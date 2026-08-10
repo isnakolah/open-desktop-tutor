@@ -4,7 +4,7 @@ import path from "node:path";
 
 import {validateNodeEnvelope} from "./protocol.mjs";
 
-const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+const MAX_RESPONSE_BYTES = Math.floor(1.5 * 1024 * 1024);
 
 export class TutorHostUnavailableError extends Error {
   constructor(message, cause) {
@@ -45,7 +45,7 @@ export async function invokeTutorHost(envelope, options = {}) {
     client.on("data", (chunk) => {
       buffer = Buffer.concat([buffer, chunk]);
       if (buffer.length > MAX_RESPONSE_BYTES) {
-        finish(new Error("TutorHost local IPC response exceeded 2 MiB"));
+        finish(new Error("TutorHost local IPC response exceeded 1.5 MiB"));
         return;
       }
       const newline = buffer.indexOf(0x0a);
@@ -68,20 +68,26 @@ export async function invokeTutorHost(envelope, options = {}) {
   });
 }
 
+/**
+ * The node transport hands the handler a JSON string and expects one back.
+ * Returning the parsed object instead is silently lossy: the invoke result
+ * comes back `{ok: true, payloadJSON: null}` and the Mac's entire response —
+ * snapshot, capture, error code — never reaches the Gateway.
+ */
 export async function handleTutorNodeHostCommand(rawParams, options = {}) {
   try {
     let envelope = rawParams;
     if (typeof rawParams === "string") {
       envelope = JSON.parse(rawParams);
     }
-    return await invokeTutorHost(envelope, options);
+    return JSON.stringify(await invokeTutorHost(envelope, options));
   } catch (error) {
     if (error && ["ENOENT", "ECONNREFUSED", "EPIPE"].includes(error.code)) {
-      return {
+      return JSON.stringify({
         ok: false,
         code: "TUTOR_HOST_UNAVAILABLE",
         message: "Calla TutorHost is not running or is not accepting local requests.",
-      };
+      });
     }
     throw error;
   }

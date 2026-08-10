@@ -44,6 +44,7 @@ class MacSetupToolTests(unittest.TestCase):
         self.assertIn("pack-build", source)
         self.assertIn("--openclaw-bin $openclaw_binary", source)
         self.assertIn("WantedBy=default.target", source)
+        self.assertIn("completed (Calla Mac paired)", source)
         self.assertNotIn("cf-dns is required", source)
 
     def test_macos_setup_installs_the_single_private_node_without_credentials(self):

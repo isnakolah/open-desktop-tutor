@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# Build and install "Calla TutorHost.app".
+#
+# The host has to be a real application bundle rather than a bare binary for two
+# reasons. Screen Recording is granted to an application identity, and a bundle
+# is what gives the host a stable name and identifier in System Settings instead
+# of a build-directory path that moves. And the overlay renderer only composites
+# when it is its own application, so it ships nested at Contents/Helpers.
+#
+# Ad-hoc signing still changes the code hash on every rebuild, and TCC keys the
+# grant to that hash, so macOS re-asks for Screen Recording after a rebuild. A
+# real Developer ID identity is what would make the grant stick; until there is
+# one, expect one approval per rebuild.
+set -euo pipefail
+
+SCRIPT_DIRECTORY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPOSITORY_ROOT="$(cd "$SCRIPT_DIRECTORY/.." && pwd)"
+HOST_PACKAGE="$REPOSITORY_ROOT/apps/macos/TutorHost"
+DESTINATION="${CALLA_APP_DESTINATION:-$HOME/Applications}"
+APP="$DESTINATION/Calla TutorHost.app"
+BUILD_ONLY=0
+RESTART=1
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/build-tutor-host-app.sh [options]
+
+Build the release TutorHost and overlay renderer, assemble them into
+"Calla TutorHost.app", and install it into ~/Applications.
+
+Options:
+  --build-only   Assemble the bundle without restarting a running host
+  --no-restart   Alias for --build-only
+  -h, --help     Show this help
+
+Environment:
+  CALLA_APP_DESTINATION   Install directory (default: ~/Applications)
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --build-only|--no-restart) BUILD_ONLY=1; RESTART=0 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+  shift
+done
+
+[[ "$(uname -s)" == "Darwin" ]] || { echo "ERROR: this builds a macOS application bundle" >&2; exit 1; }
+command -v xcrun >/dev/null 2>&1 || { echo "ERROR: install the Xcode Command Line Tools" >&2; exit 1; }
+
+echo "Building the release host and overlay renderer..."
+xcrun swift build --package-path "$HOST_PACKAGE" -c release
+BINARY_DIRECTORY="$(xcrun swift build --package-path "$HOST_PACKAGE" -c release --show-bin-path)"
+
+for required in CallaTutorHost CallaOverlayHelper; do
+  [[ -x "$BINARY_DIRECTORY/$required" ]] || { echo "ERROR: $required did not build" >&2; exit 1; }
+done
+
+STAGING="$(mktemp -d)"
+trap 'rm -rf "$STAGING"' EXIT
+STAGED_APP="$STAGING/Calla TutorHost.app"
+HELPER_APP="$STAGED_APP/Contents/Helpers/CallaOverlayHelper.app"
+
+mkdir -p "$STAGED_APP/Contents/MacOS" "$HELPER_APP/Contents/MacOS"
+cp "$BINARY_DIRECTORY/CallaTutorHost" "$STAGED_APP/Contents/MacOS/CallaTutorHost"
+cp "$BINARY_DIRECTORY/CallaOverlayHelper" "$HELPER_APP/Contents/MacOS/CallaOverlayHelper"
+
+# LSUIElement on both: the host lives in the menu bar and the renderer must
+# never take focus away from the application the learner is being taught.
+cat >"$STAGED_APP/Contents/Info.plist" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleDisplayName</key><string>Calla TutorHost</string>
+  <key>CFBundleExecutable</key><string>CallaTutorHost</string>
+  <key>CFBundleIconFile</key><string>Calla</string>
+  <key>CFBundleIdentifier</key><string>com.calla.tutor-host</string>
+  <key>CFBundleName</key><string>Calla TutorHost</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>LSUIElement</key><true/>
+  <key>NSAccessibilityUsageDescription</key><string>Calla resolves the control a lesson is about on this Mac.</string>
+</dict></plist>
+EOF
+
+cat >"$HELPER_APP/Contents/Info.plist" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>Calla Overlay</string>
+  <key>CFBundleIdentifier</key><string>com.calla.tutor-host.overlay</string>
+  <key>CFBundleExecutable</key><string>CallaOverlayHelper</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>LSUIElement</key><true/>
+</dict></plist>
+EOF
+
+# The icon is rendered from the same artwork Calla draws on screen, so the mark
+# in the Dock, the menu bar, and the pointer over the lesson are one thing.
+# qlmanage is the SVG rasteriser every Mac already has.
+ICON_SOURCE="$REPOSITORY_ROOT/apps/macos/TutorHost/assets/calla-icon.svg"
+if [[ -f "$ICON_SOURCE" ]]; then
+  ICON_WORK="$STAGING/icon"
+  ICONSET="$ICON_WORK/Calla.iconset"
+  mkdir -p "$ICONSET"
+  cp "$ICON_SOURCE" "$ICON_WORK/calla-icon.svg"
+  (cd "$ICON_WORK" && qlmanage -t -s 1024 -o . calla-icon.svg >/dev/null 2>&1)
+  MASTER="$ICON_WORK/calla-icon.svg.png"
+  if [[ -f "$MASTER" ]]; then
+    for size in 16 32 128 256 512; do
+      sips -z "$size" "$size" "$MASTER" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null 2>&1
+      sips -z "$((size * 2))" "$((size * 2))" "$MASTER" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null 2>&1
+    done
+    mkdir -p "$STAGED_APP/Contents/Resources"
+    iconutil -c icns "$ICONSET" -o "$STAGED_APP/Contents/Resources/Calla.icns" 2>/dev/null \
+      || echo "note: could not build Calla.icns; the app will use the generic icon" >&2
+  else
+    echo "note: could not rasterise $ICON_SOURCE; the app will use the generic icon" >&2
+  fi
+fi
+
+# Ad-hoc signing with a stable identifier, inner bundle first, so the host shows
+# up under one name in System Settings rather than accumulating an entry per
+# build. The code hash still changes, so the grant itself does not carry over.
+codesign --force --sign - --identifier com.calla.tutor-host.overlay "$HELPER_APP"
+codesign --force --sign - --identifier com.calla.tutor-host "$STAGED_APP"
+codesign --verify --deep --strict "$STAGED_APP"
+
+if [[ "$RESTART" -eq 1 ]] && pgrep -f "Calla TutorHost.app/Contents/MacOS/CallaTutorHost" >/dev/null 2>&1; then
+  echo "Stopping the running TutorHost..."
+  pkill -f "Calla TutorHost.app/Contents/MacOS/CallaTutorHost" || true
+  pkill -f "CallaOverlayHelper.app/Contents/MacOS/CallaOverlayHelper" || true
+  sleep 1
+fi
+
+mkdir -p "$DESTINATION"
+rm -rf "$APP"
+# Move rather than copy so the installed bundle is never half-written.
+mv "$STAGED_APP" "$APP"
+echo "Installed $APP"
+
+if [[ "$BUILD_ONLY" -eq 1 ]]; then
+  echo "Skipped starting the host (--build-only)."
+  exit 0
+fi
+
+open -a "$APP"
+echo
+cat <<EOF
+Calla TutorHost is running in the menu bar.
+
+macOS asks for Screen Recording the first time a lesson requests a window
+capture, and asks again after a rebuild because the ad-hoc code hash changes.
+Approve "Calla TutorHost" here, then teaching works without Accessibility:
+
+  System Settings > Privacy & Security > Screen & System Audio Recording
+
+Check the whole path with:
+  python3 tools/calla_guide_probe.py --bundle-id <the app you want taught>
+EOF
