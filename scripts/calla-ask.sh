@@ -19,13 +19,19 @@ GATEWAY_SSH="${CALLA_GATEWAY_SSH:-isnakolah@nomonhomelab}"
 # A control socket path has to fit in 104 bytes.
 CONTROL="/tmp/calla-raycast.sock"
 SESSION="${CALLA_SESSION:-calla-raycast}"
+# Teaching has its own agent. The general assistant answers a "how do I…" the
+# way an assistant should — with a written recipe — and no tool description
+# outranks eight kilobytes of workspace persona telling it to be helpful in
+# chat. A workspace whose first instruction is "never write instructions" is
+# what makes it point at the screen instead.
+AGENT="${CALLA_AGENT:-calla}"
 # "high" costs about three minutes a step and buys nothing: finding a labelled
 # control in a screenshot is recognition, not reasoning.
 THINKING="${CALLA_THINKING:-low}"
 
 QUOTED=$(printf '%s' "$MESSAGE" | sed "s/'/'\\\\''/g")
 REMOTE="export PATH=\$HOME/.npm-global/bin:\$PATH;
-nohup openclaw agent --session-id $SESSION --thinking $THINKING -m '$QUOTED' \
+nohup openclaw agent --agent $AGENT --session-id $SESSION --thinking $THINKING -m '$QUOTED' \
   > /tmp/calla-raycast-last.txt 2>&1 &
 echo started"
 
