@@ -207,10 +207,10 @@ struct CallaTooltip: View {
             .onAppear { questionFocused = true }
         } else {
             HStack(spacing: 8) {
-                pill("Did it", "checkmark") { onEvent?("next", "") }
-                pill("Ask", "questionmark") { asking = true }
+                pill("Did it", "⌥⌘↩") { onEvent?("next", "") }
+                pill("Ask", "⌥⌘/") { asking = true }
                 Spacer(minLength: 0)
-                pill("Stop", "xmark") { onEvent?("stop", "") }
+                pill("Stop", "⌥⌘.") { onEvent?("stop", "") }
             }
             .padding(.top, 1)
         }
@@ -224,11 +224,16 @@ struct CallaTooltip: View {
         asking = false
     }
 
-    private func pill(_ title: String, _ symbol: String, action: @escaping () -> Void) -> some View {
+    /// The shortcut rides on the button, because a shortcut nobody can see is a
+    /// shortcut nobody uses — and the tooltip moves away from the pointer, so
+    /// the keyboard is the better way to answer it anyway.
+    private func pill(_ title: String, _ shortcut: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: symbol).font(.system(size: 9, weight: .bold))
+            HStack(spacing: 5) {
                 Text(title).font(.system(size: 11, weight: .medium, design: .rounded))
+                Text(shortcut)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 9)
             .padding(.vertical, 4)
@@ -414,6 +419,7 @@ final class CallaOverlay {
         setThinking(false, step: step, text: text)
         self.status(status)
         narrating = true
+        Shortcuts.shared.claim()
         tooltipAlpha = 1
         proximityAlpha = 1
         show()
@@ -581,7 +587,9 @@ final class CallaOverlay {
         if let window, window.width >= size.width + 20, window.height >= size.height + 20 {
             bounds = window
         }
-        let gap: CGFloat = 26
+        // Close enough to read as one object with the pointer. Far enough not
+        // to cover what the pointer is indicating.
+        let gap: CGFloat = 10
         // Cocoa's y grows upward, so a cursor high on screen has a large y and
         // wants its words below it, at a smaller y.
         let preferBelow = point.y > bounds.midY
@@ -642,6 +650,7 @@ final class CallaOverlay {
     func hide() {
         // Fade out rather than destroy: rebuilt panels would never composite.
         narrating = false
+        Shortcuts.shared.release()
         applyVisibility()
     }
 
@@ -667,13 +676,17 @@ final class Shortcuts {
     static let shared = Shortcuts()
 
     /// ⌥⌘⏎ did it · ⌥⌘/ ask · ⌥⌘. stop
-    private static let bindings: [(id: UInt32, key: Int, event: String)] = [
-        (1, kVK_Return, "next"),
-        (2, kVK_ANSI_Slash, "ask"),
-        (3, kVK_ANSI_Period, "stop"),
+    private static let bindings: [(id: UInt32, key: Int, event: String, label: String)] = [
+        (1, kVK_Return, "next", "⌥⌘↩"),
+        (2, kVK_ANSI_Slash, "ask", "⌥⌘/"),
+        (3, kVK_ANSI_Period, "stop", "⌥⌘."),
     ]
 
     private var installed = false
+    private var registered: [EventHotKeyRef] = []
+    /// Combos another application already owns. Reported rather than silently
+    /// swallowed, because a shortcut that does nothing is worse than none.
+    private(set) var unavailable: [String] = []
 
     func install(onEvent: @escaping (String) -> Void) {
         guard !installed else { return }
@@ -692,13 +705,39 @@ final class Shortcuts {
             return noErr
         }, 1, &spec, nil, nil)
 
+    }
+
+    /// Hold the keys only while a lesson is on screen.
+    ///
+    /// A system-wide hot key outranks the application underneath it, so holding
+    /// these all the time would quietly take three combinations away from every
+    /// program on the Mac — including the one being taught. Claiming them only
+    /// while the tooltip is up means a collision can last as long as a lesson
+    /// and no longer.
+    func claim() {
+        guard installed, registered.isEmpty else { return }
+        unavailable = []
         let modifiers = UInt32(optionKey | cmdKey)
         for binding in Self.bindings {
             var reference: EventHotKeyRef?
-            RegisterEventHotKey(UInt32(binding.key), modifiers,
-                                EventHotKeyID(signature: OSType(0x43414C41), id: binding.id),
-                                GetApplicationEventTarget(), 0, &reference)
+            let status = RegisterEventHotKey(
+                UInt32(binding.key), modifiers,
+                EventHotKeyID(signature: OSType(0x43414C41), id: binding.id),
+                GetApplicationEventTarget(), 0, &reference)
+            if status == noErr, let reference {
+                registered.append(reference)
+            } else {
+                unavailable.append(binding.label)
+            }
         }
+        if !unavailable.isEmpty {
+            CallaOverlay.emit("shortcuts_unavailable", unavailable.joined(separator: " "))
+        }
+    }
+
+    func release() {
+        for reference in registered { UnregisterEventHotKey(reference) }
+        registered = []
     }
 
     private var onEvent: ((String) -> Void)?

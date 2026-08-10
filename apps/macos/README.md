@@ -74,6 +74,13 @@ because it moves out from under your pointer:
 These are Carbon hot keys rather than a global `NSEvent` monitor, which is what
 keeps them working without an Accessibility grant.
 
+A system-wide hot key outranks the application underneath it, so Calla claims
+these three only while a lesson is on screen and gives them back the moment it
+ends. A collision can therefore last as long as a lesson and no longer, rather
+than taking three combinations away from every program on the Mac for good. If
+another application already holds one when a lesson starts, Calla says so
+instead of leaving a button that looks live and does nothing.
+
 ## Overlay scope
 
 The cursor and tooltip are placed against the taught window — the tooltip sits
