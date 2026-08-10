@@ -8,11 +8,15 @@ import Foundation
 /// It hands them to `scripts/calla-ask.sh`, the one place that knows where a
 /// question goes, which is the same path the Raycast commands take.
 @MainActor
-final class LessonRelay {
+final class LessonRelay: ObservableObject {
     static let shared = LessonRelay()
 
     private var inFlight: Process?
     private var checking = false
+    /// The one-time Tailscale approval link, when reaching Calla needs one.
+    /// Detected here because the sender is the only thing that sees it, and it
+    /// is useless in a log nobody is tailing.
+    @Published private(set) var authorisationURL: URL?
 
     func handle(event: String, text: String) {
         switch event {
@@ -44,6 +48,8 @@ final class LessonRelay {
     /// Drop whatever was in flight. A question already travelling would
     /// otherwise come back and put a step on a screen the learner has finished
     /// with.
+    func clearAuthorisation() { authorisationURL = nil }
+
     func abort() {
         inFlight?.terminate()
         inFlight = nil
@@ -73,8 +79,22 @@ final class LessonRelay {
         let task = Process()
         task.executableURL = sender
         task.arguments = [message]
-        task.standardOutput = FileHandle.nullDevice
-        task.standardError = FileHandle.nullDevice
+        let output = Pipe()
+        task.standardOutput = output
+        task.standardError = output
+        output.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            guard let range = text.range(of: "https://login.tailscale.com/[^ \n]+", options: .regularExpression),
+                  let url = URL(string: String(text[range])) else { return }
+            Task { @MainActor in
+                LessonRelay.shared.authorisationURL = url
+                PointerOverlay.shared.narrate(
+                    step: "Calla",
+                    text: "Calla needs one Tailscale approval. Open it from the menu bar.",
+                    status: "Calla — needs authorisation", thinking: false)
+            }
+        }
         do {
             try task.run()
             inFlight = task

@@ -19,6 +19,24 @@ enum CallaMark {
 
     static let menuBar: NSImage = image(edge: 16)
 
+    /// A tinted, non-template mark.
+    ///
+    /// Template images are recoloured by the system to match the menu bar, which
+    /// is what you want for a plain icon and exactly wrong here: the colour is
+    /// the status. Green ready, blue teaching, orange needs something, grey
+    /// paused — legible without opening the menu at all.
+    static func image(edge: CGFloat, tint: NSColor) -> NSImage {
+        let base = image(edge: edge)
+        let tinted = NSImage(size: base.size, flipped: false) { rect in
+            base.draw(in: rect)
+            tint.set()
+            rect.fill(using: .sourceAtop)
+            return true
+        }
+        tinted.isTemplate = false
+        return tinted
+    }
+
     static func image(edge: CGFloat) -> NSImage {
         let image = NSImage(size: NSSize(width: edge, height: edge), flipped: false) { rect in
             let scale = min(rect.width, rect.height) / viewBox

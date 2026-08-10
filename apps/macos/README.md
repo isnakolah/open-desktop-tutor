@@ -17,6 +17,25 @@ allowlisted window, screenshot-driven guiding and narration, pack-authored local
 overlays, point-only visual search priors, local approval, and fresh detector
 verification. No capture is written to disk.
 
+## The mark in the menu bar
+
+Its colour is the status, so the state is legible without opening anything:
+
+| | |
+| --- | --- |
+| green | ready to teach |
+| blue | a lesson is running |
+| orange | something needs you — permission, connection, or no application allowed |
+| grey | teaching is paused |
+
+It is drawn as a tinted, non-template image on purpose. A template image is
+recoloured by the system to match the menu bar, which is right for a plain icon
+and exactly wrong when the colour is the message.
+
+When reaching the Gateway needs a Tailscale approval, the link appears in the
+menu with a button that opens it. The sender is the only thing that ever sees
+that URL, and it is useless in a log nobody is tailing.
+
 ## Settings
 
 The menu bar is where this Mac's owner sees and changes what Calla may do.

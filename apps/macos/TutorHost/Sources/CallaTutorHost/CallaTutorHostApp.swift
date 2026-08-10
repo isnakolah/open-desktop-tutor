@@ -8,15 +8,24 @@ struct CallaTutorHostApp: App {
     @StateObject private var settings = TutorSettings.shared
     @NSApplicationDelegateAdaptor(CallaAppDelegate.self) private var appDelegate
 
+    /// Green ready · blue teaching · orange needs something · grey paused.
+    private var statusTint: NSColor {
+        if !host.captureActive { return .secondaryLabelColor }
+        if !settings.screenRecordingGranted { return .systemOrange }
+        if case .connected = BackendStatus.shared.link {} else { return .systemOrange }
+        if settings.allowedBundleIDs.isEmpty { return .systemOrange }
+        return host.lessonActive ? .systemBlue : .systemGreen
+    }
+
     var body: some Scene {
         MenuBarExtra {
             CallaMenu(host: host, settings: settings,
-                      backend: BackendStatus.shared, subject: LessonSubject.shared)
+                      backend: BackendStatus.shared, subject: LessonSubject.shared,
+                      relay: LessonRelay.shared)
         } label: {
-            // Calla's own mark rather than a system glyph, dimmed while teaching
-            // is paused so the menu bar says which state it is in.
-            Image(nsImage: CallaMark.menuBar)
-                .opacity(host.captureActive ? 1 : 0.4)
+            // The mark carries the status in its colour, so the menu bar answers
+            // "is Calla all right" without being opened.
+            Image(nsImage: CallaMark.image(edge: 16, tint: statusTint))
         }
         .menuBarExtraStyle(.window)
     }

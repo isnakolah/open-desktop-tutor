@@ -13,6 +13,7 @@ struct CallaMenu: View {
     @ObservedObject var settings: TutorSettings
     @ObservedObject var backend: BackendStatus
     @ObservedObject var subject: LessonSubject
+    @ObservedObject var relay = LessonRelay.shared
 
     @State private var showingOptions = false
 
@@ -45,6 +46,15 @@ struct CallaMenu: View {
             // ScrollView collapses to nothing and the panel becomes a header
             // and a footer with a gap between them.
             VStack(alignment: .leading, spacing: 14) {
+                if let url = relay.authorisationURL {
+                    card(icon: "link.badge.plus",
+                         title: "Calla needs one Tailscale approval",
+                         detail: "Reaching the Gateway asks for a browser check when the session expires.",
+                         action: ("Open", {
+                             NSWorkspace.shared.open(url)
+                             relay.clearAuthorisation()
+                         }))
+                }
                 if let approval = host.pendingApproval { approvalCard(approval) }
                 problemCard
                 applications
