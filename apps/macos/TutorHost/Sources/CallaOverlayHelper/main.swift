@@ -393,6 +393,7 @@ final class CallaOverlay {
     /// Rather than trying to out-guess which process macOS calls frontmost,
     /// scoping is simply suspended for as long as the field is up.
     private var askOpen = false
+    private var shortcutsHeld = false
     private var hudEnabled = true
 
     /// The size the artwork is currently drawn at, inside a panel that is
@@ -555,11 +556,17 @@ final class CallaOverlay {
     /// notification: the overlay would hide and never come back. Frontmost is
     /// polled on the pointer timer now, so that cannot happen.
     private func applyVisibility() {
-        // Claim the shortcuts whenever a lesson is up, and give them back when
-        // it is not. Claiming only on the first step meant every later step —
-        // which takes a different path — ran with no keys registered, and one
-        // hide released them for the rest of the session.
-        if narrating { Shortcuts.shared.claim() } else { Shortcuts.shared.release() }
+        // Claim on the way into a lesson, release on the way out — on the
+        // transition only. applyVisibility runs on every step, every hover and
+        // every focus poll, and driving claim/release from it churned the
+        // registrations dozens of times a lesson. Carbon does not complain
+        // about that, it just leaves duplicates behind, so one press of ⌥⌘.
+        // arrived as many stops and killed the lesson the learner had just
+        // started.
+        if narrating != shortcutsHeld {
+            shortcutsHeld = narrating
+            if narrating { Shortcuts.shared.claim() } else { Shortcuts.shared.release() }
+        }
         let onScreen = !followFocus || ownerIsFrontmost || askOpen
         cursor?.alphaValue = onScreen ? 1 : 0
         // The tooltip is the only thing that gets out of the way, and it does it
@@ -925,7 +932,9 @@ final class Shortcuts {
     /// while the tooltip is up means a collision can last as long as a lesson
     /// and no longer.
     func claim() {
-        guard installed, registered.isEmpty else { return }
+        guard installed else { return }
+        // Registering over the top of a live set is what produced duplicates.
+        guard registered.isEmpty else { return }
         unavailable = []
         let modifiers = UInt32(optionKey | cmdKey)
         note("claiming shortcuts")
