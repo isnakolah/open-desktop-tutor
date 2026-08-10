@@ -63,7 +63,11 @@ trap 'rm -rf "$STAGING"' EXIT
 STAGED_APP="$STAGING/Calla TutorHost.app"
 HELPER_APP="$STAGED_APP/Contents/Helpers/CallaOverlayHelper.app"
 
-mkdir -p "$STAGED_APP/Contents/MacOS" "$HELPER_APP/Contents/MacOS"
+mkdir -p "$STAGED_APP/Contents/MacOS" "$HELPER_APP/Contents/MacOS" "$STAGED_APP/Contents/Resources"
+# The tooltip's own buttons need a way to reach Calla, and the installed bundle
+# has no checkout to find it in.
+cp "$SCRIPT_DIRECTORY/calla-ask.sh" "$STAGED_APP/Contents/Resources/calla-ask.sh"
+chmod +x "$STAGED_APP/Contents/Resources/calla-ask.sh"
 cp "$BINARY_DIRECTORY/CallaTutorHost" "$STAGED_APP/Contents/MacOS/CallaTutorHost"
 cp "$BINARY_DIRECTORY/CallaOverlayHelper" "$HELPER_APP/Contents/MacOS/CallaOverlayHelper"
 

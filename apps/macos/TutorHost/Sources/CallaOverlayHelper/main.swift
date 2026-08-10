@@ -138,11 +138,22 @@ struct CallaCursor: View {
 
 // MARK: - Tooltip
 
+/// The lesson's controls live on the lesson.
+///
+/// Everything a learner needs mid-step — I did that, a question, stop — is here
+/// rather than in a menu or another application. Going somewhere else to say "I
+/// finished" means leaving the window being taught, which is the thing this
+/// whole design is trying to avoid.
 struct CallaTooltip: View {
     let accent: Color
     let step: String
     let text: String
     let thinking: Bool
+    var onEvent: ((String, String) -> Void)?
+
+    @State private var asking = false
+    @State private var question = ""
+    @FocusState private var questionFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -162,10 +173,12 @@ struct CallaTooltip: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
+            if onEvent != nil { controls }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .frame(width: 300, alignment: .leading)
+        .animation(.easeOut(duration: 0.14), value: asking)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(.regularMaterial)
@@ -173,6 +186,52 @@ struct CallaTooltip: View {
                     .strokeBorder(accent.opacity(0.45), lineWidth: 1))
                 .shadow(color: .black.opacity(0.32), radius: 18, y: 8)
         )
+    }
+
+    @ViewBuilder private var controls: some View {
+        if asking {
+            HStack(spacing: 6) {
+                TextField("Ask Calla…", text: $question)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12))
+                    .focused($questionFocused)
+                    .onSubmit(send)
+                Button("Send", action: send)
+                    .controlSize(.small)
+                    .disabled(question.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .onAppear { questionFocused = true }
+        } else {
+            HStack(spacing: 8) {
+                pill("Did it", "checkmark") { onEvent?("next", "") }
+                pill("Ask", "questionmark") { asking = true }
+                Spacer(minLength: 0)
+                pill("Stop", "xmark") { onEvent?("stop", "") }
+            }
+            .padding(.top, 1)
+        }
+    }
+
+    private func send() {
+        let trimmed = question.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        onEvent?("ask", trimmed)
+        question = ""
+        asking = false
+    }
+
+    private func pill(_ title: String, _ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: symbol).font(.system(size: 9, weight: .bold))
+                Text(title).font(.system(size: 11, weight: .medium, design: .rounded))
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(accent.opacity(0.18)))
+            .overlay(Capsule().strokeBorder(accent.opacity(0.35), lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -228,6 +287,18 @@ final class CallaOverlay {
     /// this is about not covering what the learner is trying to look at.
     private var proximityAlpha: CGFloat = 1
     private var tooltipAlpha: CGFloat = 1
+    /// Tall enough for two lines and the control row beneath them.
+    private let tooltipHeight: CGFloat = 148
+
+    /// The learner pressed something in the tooltip. The host is listening on
+    /// this process's stdout, because it owns the connection to Calla.
+    private static func emit(_ event: String, _ text: String) {
+        let payload: [String: Any] = ["event": event, "text": text]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let line = String(data: data, encoding: .utf8) else { return }
+        print(line)
+        fflush(stdout)
+    }
     private var pointerWatch: Timer?
     private var dimNearPointer = true
     private var hudEnabled = true
@@ -268,12 +339,18 @@ final class CallaOverlay {
     /// here, so the window server assigns it a window number, reports
     /// `isVisible`, and still composites nothing. With it the panel renders over
     /// whichever application the learner is actually using.
-    private func panel(_ frame: CGRect) -> NSPanel {
+    private func panel(_ frame: CGRect, interactive: Bool = false) -> NSPanel {
         let p = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         p.isOpaque = false
         p.backgroundColor = .clear
         p.hasShadow = false
-        p.ignoresMouseEvents = true       // the user's pointer keeps every click
+        // Only the tooltip takes clicks, and only because it carries the
+        // lesson's controls. A non-activating panel can take them without
+        // pulling focus off the application being taught, which is the whole
+        // reason the controls can live here at all.
+        p.ignoresMouseEvents = !interactive
+        p.becomesKeyOnlyIfNeeded = !interactive
+        p.isFloatingPanel = true
         p.level = .floating
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         return p
@@ -299,8 +376,9 @@ final class CallaOverlay {
         c.contentView = NSHostingView(rootView: CallaCursor(size: cursorPointSize, thinking: true))
         c.orderFrontRegardless(); cursor = c
 
-        let t = panel(CGRect(x: park.x, y: park.y, width: 300, height: 100))
-        t.contentView = NSHostingView(rootView: CallaTooltip(accent: accent, step: "", text: "", thinking: false))
+        let t = panel(CGRect(x: park.x, y: park.y, width: 300, height: tooltipHeight), interactive: true)
+        t.contentView = NSHostingView(rootView: CallaTooltip(accent: accent, step: "", text: "",
+                                                             thinking: false, onEvent: Self.emit))
         t.alphaValue = 0
         t.orderFrontRegardless(); tooltip = t
 
@@ -447,7 +525,7 @@ final class CallaOverlay {
     /// and the same for left and right. A window too small to hold it leaves
     /// nowhere legal to sit, so fall back to the display.
     private func tooltipFrame(for point: CGPoint) -> CGRect {
-        let size = CGSize(width: 300, height: 100)
+        let size = CGSize(width: 300, height: tooltipHeight)
         let display = (NSScreen.screens.first { $0.frame.contains(point) } ?? NSScreen.main!).frame
         var bounds = display
         if let window, window.width >= size.width + 20, window.height >= size.height + 20 {
@@ -481,7 +559,7 @@ final class CallaOverlay {
         thinking = value
         cursor?.contentView = NSHostingView(rootView: CallaCursor(size: cursorPointSize, thinking: value))
         tooltip?.contentView = NSHostingView(rootView:
-            CallaTooltip(accent: accent, step: step, text: text, thinking: value))
+            CallaTooltip(accent: accent, step: step, text: text, thinking: value, onEvent: Self.emit))
     }
 
     /// Puts the narration away and leaves the pointer on screen. Calla is still

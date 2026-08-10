@@ -957,9 +957,27 @@ final class PointerOverlay {
         task.executableURL = helper
         let pipe = Pipe()
         task.standardInput = pipe
+        // The tooltip carries the lesson's controls, so the renderer has to be
+        // able to talk back. It writes one JSON object per line here.
+        let events = Pipe()
+        task.standardOutput = events
         guard (try? task.run()) != nil else { return }
         process = task
         input = pipe.fileHandleForWriting
+        listen(to: events.fileHandleForReading)
+    }
+
+    private func listen(to handle: FileHandle) {
+        handle.readabilityHandler = { pipe in
+            let data = pipe.availableData
+            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            for line in text.split(separator: "\n") {
+                guard let payload = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                      let event = payload["event"] as? String else { continue }
+                let detail = payload["text"] as? String ?? ""
+                Task { @MainActor in LessonRelay.shared.handle(event: event, text: detail) }
+            }
+        }
     }
 
     private func send(_ command: [String: Any]) {
