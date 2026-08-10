@@ -69,7 +69,14 @@ install_tailscale_proxy() {
 }
 
 node_enroller_status() {
-  systemctl --user is-active --quiet calla-node-enroller.service && echo "Calla node enroller: active" || echo "Calla node enroller: inactive"
+  if systemctl --user is-active --quiet calla-node-enroller.service; then
+    echo "Calla node enroller: waiting for Calla Mac"
+  elif systemctl --user is-enabled --quiet calla-node-enroller.service \
+    && [[ "$(systemctl --user show calla-node-enroller.service --property=ExecMainStatus --value)" == "0" ]]; then
+    echo "Calla node enroller: completed (Calla Mac paired)"
+  else
+    echo "Calla node enroller: inactive"
+  fi
 }
 
 while [[ $# -gt 0 ]]; do
