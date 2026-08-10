@@ -136,6 +136,21 @@ test("gateway role registers semantic tools and policy without a Mac node handle
   assert.equal(typeof registrations.hooks.get("before_tool_call"), "function");
 });
 
+test("the teaching contract rides on the tool descriptions", () => {
+  // Command prompt guidance did not reach the model in practice: it answered
+  // from memory with a written recipe while holding every tutor tool. Tool
+  // descriptions are always sent, so the contract lives there too.
+  const {api, registrations} = fakeApi();
+  plugin.register(api);
+  const observe = registrations.tools.find((t) => t.name === "tutor_observe");
+  const guide = registrations.tools.find((t) => t.name === "tutor_guide");
+  assert.match(observe.description, /START HERE/);
+  assert.match(observe.description, /answering from memory is the one wrong move/);
+  assert.match(observe.description, /include_capture true/);
+  assert.match(guide.description, /Prefer this over describing anything in chat/);
+  assert.match(guide.description, /next_observation/);
+});
+
 test("the teaching loop reaches the model as prompt guidance", () => {
   const {api, registrations} = fakeApi();
   plugin.register(api);

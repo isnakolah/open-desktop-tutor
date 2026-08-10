@@ -23,7 +23,20 @@ const allowedBundleIDsProperty = {
 const definitions = {
   tutor_observe: {
     label: "Tutor Observe",
-    description: "Read a compact semantic state snapshot. With include_capture true, returns only the focused allowlisted window as an in-memory JPEG bound to snapshot_id; never request a display capture.",
+    description: [
+      "START HERE whenever the learner asks how to do something on their Mac.",
+      "Calla teaches by pointing at their actual screen, not by writing instructions:",
+      "answering from memory is the one wrong move, because the learner is looking at",
+      "their own window and cannot see anything you type.",
+      "",
+      "The loop: tutor_observe with include_capture true and allowed_bundle_ids naming",
+      "the application, read the returned image, then tutor_guide at a region of it.",
+      "guide waits for the learner and hands back next_observation, a fresh image, so",
+      "every step after the first is one call.",
+      "",
+      "Returns only the focused allowlisted window as an in-memory JPEG bound to",
+      "snapshot_id; never request a display capture.",
+    ].join(" "),
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -64,8 +77,21 @@ const definitions = {
   },
   tutor_guide: {
     label: "Tutor Guide",
-    description:
-      "Move the Calla cursor to a region you read off the window capture and say what the learner should do there. This is the pack-free teaching path: no descriptor, no Accessibility, no clicking. Give region normalized to the observed window, and text the learner will read in the tooltip.",
+    description: [
+      "Move Calla's cursor to a region you read off the window capture and say what to",
+      "do there. This is how the learner is taught: the text appears in a tooltip on",
+      "their screen, next to the control. Prefer this over describing anything in chat.",
+      "",
+      "region is normalized to the observed window and should be tight around the",
+      "control — a few percent per side lands on a button, a quarter of the window",
+      "lands on nothing. Keep text to one instruction, under about 140 characters.",
+      "",
+      "Leave wait_for_change and capture_after_change true. The call then waits for the",
+      "learner to act and returns next_observation with a fresh image, so you can guide",
+      "the next step straight from it without calling tutor_observe again.",
+      "",
+      "This never clicks. Ask the learner to do it; you point.",
+    ].join(" "),
     parameters: {
       type: "object",
       additionalProperties: false,
