@@ -5,6 +5,21 @@ const baseSessionProperty = {
   session_id: {type: "string", minLength: 8, description: "Opaque TutorHost teaching session id."},
 };
 
+/// Which applications this lesson is allowed to look at.
+///
+/// Without this the Mac falls back to its built-in default and only Blender can
+/// ever be taught, which defeats the point of a path that needs no authored
+/// pack. The Mac still requires one of these to be the focused window; naming an
+/// application here grants no access to it.
+const allowedBundleIDsProperty = {
+  allowed_bundle_ids: {
+    type: "array",
+    items: {type: "string", minLength: 1, maxLength: 255},
+    maxItems: 8,
+    description: "Bundle ids this lesson may observe, e.g. [\"org.blenderfoundation.blender\"].",
+  },
+};
+
 const definitions = {
   tutor_observe: {
     label: "Tutor Observe",
@@ -15,6 +30,7 @@ const definitions = {
       required: ["session_id"],
       properties: {
         ...baseSessionProperty,
+        ...allowedBundleIDsProperty,
         requested_fields: {type: "array", items: {type: "string"}, maxItems: 32},
         include_capture: {type: "boolean", default: false},
       },
@@ -56,6 +72,7 @@ const definitions = {
       required: ["session_id", "snapshot_id", "region", "text"],
       properties: {
         ...baseSessionProperty,
+        ...allowedBundleIDsProperty,
         snapshot_id: {type: "string", minLength: 1},
         region: {
           type: "object",

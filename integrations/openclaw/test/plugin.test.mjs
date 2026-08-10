@@ -232,12 +232,15 @@ test("guide carries one normalized region and never a descriptor", async () => {
   await tool.execute("call-1", {
     session_id: "session-1234",
     snapshot_id: "snapshot-1",
+    allowed_bundle_ids: ["com.figma.Desktop"],
     region: {left: 0.8, top: 0.2, width: 0.03, height: 0.03},
     step: "Step 1 of 3",
     text: "Open the Modifier Properties tab — the wrench icon.",
   });
   assert.equal(calls[0].params.operation, "guide");
   assert.deepEqual(calls[0].params.payload.region, {left: 0.8, top: 0.2, width: 0.03, height: 0.03});
+  // The lesson names its own application; nothing here is Blender-specific.
+  assert.deepEqual(calls[0].params.payload.allowed_bundle_ids, ["com.figma.Desktop"]);
 
   // A pixel rectangle wearing the region's clothes.
   assert.throws(

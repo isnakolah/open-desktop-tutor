@@ -215,6 +215,15 @@ final class CallaOverlay {
     private var narrating = false
     private var ownerIsFrontmost = true
 
+    /// How opaque the pointer should be given where the learner's own pointer
+    /// is. Panels already ignore mouse events, so Calla never steals a click —
+    /// this is about not covering what the learner is trying to look at.
+    private var proximityAlpha: CGFloat = 1
+    private var pointerWatch: Timer?
+    /// Distance from Calla's pointer at which fading starts and bottoms out.
+    private static let fadeBegins: CGFloat = 90
+    private static let fadeFloor: CGFloat = 0.12
+
     /// Local coordinates of the pointer's tip inside its own view.
     private static let hotspot = CGPoint(
         x: CallaPointerShape.tip.x / CallaPointerShape.viewBox * CallaCursor.size.width,
@@ -271,6 +280,8 @@ final class CallaOverlay {
         h.contentView = NSHostingView(rootView: StatusHUD(accent: accent, text: "Calla"))
         h.alphaValue = 0
         h.orderFrontRegardless(); hud = h
+
+        startPointerWatch()
     }
 
     func begin(at point: CGPoint, step: String, text: String, status: String) {
@@ -317,10 +328,40 @@ final class CallaOverlay {
 
     private func applyVisibility() {
         let visible = ownerIsFrontmost
-        cursor?.alphaValue = visible ? 1 : 0
+        cursor?.alphaValue = visible ? proximityAlpha : 0
         for panel in [tooltip, hud] { panel?.alphaValue = visible && narrating ? 1 : 0 }
         guard visible else { return }
         for panel in [cursor, tooltip, hud] { panel?.orderFrontRegardless() }
+    }
+
+    /// Fade Calla's pointer as the learner's own pointer nears it.
+    ///
+    /// Polled rather than event-driven on purpose: a global mouse monitor is
+    /// more machinery for the same answer, and polling keeps this feature from
+    /// depending on any permission at all, which is the point of the screenshot
+    /// path. The timer only does arithmetic while the pointer is on screen.
+    private func startPointerWatch() {
+        pointerWatch?.invalidate()
+        let timer = Timer(timeInterval: 0.05, repeats: true) { _ in
+            MainActor.assumeIsolated { CallaOverlay.shared.updateProximity() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        pointerWatch = timer
+    }
+
+    func updateProximity() {
+        guard ownerIsFrontmost, let cursor else { return }
+        let pointer = NSEvent.mouseLocation
+        let rect = cursor.frame
+        // Distance from the point to the pointer's own rect, zero inside it.
+        let dx = max(rect.minX - pointer.x, 0, pointer.x - rect.maxX)
+        let dy = max(rect.minY - pointer.y, 0, pointer.y - rect.maxY)
+        let distance = (dx * dx + dy * dy).squareRoot()
+        let nearness = max(0, min(1, 1 - distance / Self.fadeBegins))
+        let target = 1 - nearness * (1 - Self.fadeFloor)
+        guard abs(target - proximityAlpha) > 0.01 else { return }
+        proximityAlpha = target
+        cursor.alphaValue = target
     }
 
     /// Place the tooltip beside the cursor and inside the taught window.
