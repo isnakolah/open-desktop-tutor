@@ -271,15 +271,26 @@ struct StatusHUD: View {
     }
 }
 
+/// A panel that will accept the keyboard.
+///
+/// Borderless windows refuse key status, so the question field could be shown
+/// but never typed into. Non-activating plus this override is the combination
+/// that lets the tooltip take keystrokes without yanking the learner out of the
+/// application they are being taught.
+final class CallaPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
 // MARK: - Overlay
 
 @MainActor
 final class CallaOverlay {
     static let shared = CallaOverlay()
 
-    private var cursor: NSPanel?
-    private var tooltip: NSPanel?
-    private var hud: NSPanel?
+    private var cursor: CallaPanel?
+    private var tooltip: CallaPanel?
+    private var hud: CallaPanel?
     private let accent = Accent.fromWallpaper()
     private var thinking = true
 
@@ -300,6 +311,7 @@ final class CallaOverlay {
     /// around it without moving the pointer.
     private var lastPoint: CGPoint?
     private var askingRequested = 0
+    private var dodged = false
     private var currentStep = ""
     private var currentText = ""
     /// Tall enough for two lines and the control row beneath them.
@@ -354,8 +366,8 @@ final class CallaOverlay {
     /// here, so the window server assigns it a window number, reports
     /// `isVisible`, and still composites nothing. With it the panel renders over
     /// whichever application the learner is actually using.
-    private func panel(_ frame: CGRect, interactive: Bool = false) -> NSPanel {
-        let p = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    private func panel(_ frame: CGRect, interactive: Bool = false) -> CallaPanel {
+        let p = CallaPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         p.isOpaque = false
         p.backgroundColor = .clear
         p.hasShadow = false
@@ -505,7 +517,10 @@ final class CallaOverlay {
         tooltip?.contentView = NSHostingView(rootView:
             CallaTooltip(accent: accent, step: currentStep, text: currentText,
                          thinking: thinking, startAsking: askingRequested, onEvent: Self.emit))
-        // Key without activating: the learner keeps whatever they were in.
+        // Key without activating the app in the Dock sense, so the learner
+        // keeps their place; but the process does have to come forward for
+        // keystrokes to arrive at all.
+        NSApp.activate(ignoringOtherApps: true)
         tooltip?.makeKeyAndOrderFront(nil)
     }
 
@@ -539,18 +554,36 @@ final class CallaOverlay {
         // still in the way, and half-transparent text over a busy interface is
         // worse than either. When the learner's pointer reaches it, it steps to
         // whichever corner of the cursor is furthest from their hand.
-        if let tooltip, narrating, let anchor = lastPoint {
-            let reached = tooltip.frame.insetBy(dx: -12, dy: -12).contains(pointer)
-            if reached {
-                let moved = tooltipFrame(for: anchor, avoiding: pointer)
-                if abs(moved.minX - tooltip.frame.minX) > 1 || abs(moved.minY - tooltip.frame.minY) > 1 {
-                    NSAnimationContext.runAnimationGroup { context in
-                        context.duration = 0.16
-                        context.allowsImplicitAnimation = true
-                        tooltip.animator().setFrame(moved, display: true)
-                    }
-                }
-            }
+        // Move only when the answer changes — the pointer arrives, or leaves.
+        //
+        // Comparing against the tooltip's current frame instead meant a
+        // decision every 50ms, and since the frame is mid-animation it never
+        // matched, so each tick started a fresh animation on top of the last
+        // one. That is what the shaking was. One transition, one animation.
+        // Dodge away when the pointer arrives; come back only once the place it
+        // came from is clear.
+        //
+        // The obvious version oscillates: it steps aside, which means the
+        // pointer is no longer on it, which means it comes home — straight back
+        // under the pointer — and away again, forever. That was the shaking.
+        // Going home is therefore conditioned on home being empty, not on the
+        // tooltip's current position being empty.
+        guard let tooltip, narrating, let anchor = lastPoint else { return }
+        let home = tooltipFrame(for: anchor)
+        let move: CGRect?
+        if dodged {
+            move = home.insetBy(dx: -20, dy: -20).contains(pointer) ? nil : home
+        } else {
+            move = tooltip.frame.insetBy(dx: -14, dy: -14).contains(pointer)
+                ? tooltipFrame(for: anchor, avoiding: pointer)
+                : nil
+        }
+        guard let destination = move else { return }
+        dodged = destination != home
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            tooltip.animator().setFrame(destination, display: true)
         }
     }
 
@@ -592,13 +625,14 @@ final class CallaOverlay {
         let gap: CGFloat = 10
         // Cocoa's y grows upward, so a cursor high on screen has a large y and
         // wants its words below it, at a smaller y.
-        let preferBelow = point.y > bounds.midY
-        let preferRight = point.x < bounds.midX
-
-        let xs = preferRight ? [point.x + gap, point.x - gap - size.width]
-                             : [point.x - gap - size.width, point.x + gap]
-        let ys = preferBelow ? [point.y - gap - size.height, point.y + gap]
-                             : [point.y + gap, point.y - gap - size.height]
+        // Down and to the right of the tip first, every time. A tooltip that
+        // picks a different corner each step stops looking attached to the
+        // arrow, which is the only thing telling the learner the words and the
+        // pointer are one object. Cocoa's y grows upward, so "below" is the
+        // smaller y. The other three corners are fallbacks for when it does not
+        // fit, and targets for stepping aside.
+        let xs = [point.x + gap, point.x - gap - size.width]
+        let ys = [point.y - gap - size.height, point.y + gap]
 
         var slots: [CGRect] = []
         for y in ys {
@@ -625,6 +659,26 @@ final class CallaOverlay {
         let dx = max(rect.minX - pointer.x, 0, pointer.x - rect.maxX)
         let dy = max(rect.minY - pointer.y, 0, pointer.y - rect.maxY)
         return (dx * dx + dy * dy).squareRoot()
+    }
+
+    /// Slide the pointer and its words to the next step together.
+    func glide(from: CGPoint, to rawPoint: CGPoint, duration: TimeInterval) {
+        let point = clamped(rawPoint)
+        lastPoint = point
+        dodged = false
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            // setFrame, not setFrameOrigin: the animator proxy ignores
+            // setFrameOrigin on a window, so animating that way moved the
+            // tooltip and left the pointer standing where it was.
+            if let cursor {
+                cursor.animator().setFrame(
+                    CGRect(origin: cursorOrigin(for: point), size: cursor.frame.size),
+                    display: true)
+            }
+            tooltip?.animator().setFrame(tooltipFrame(for: point), display: true)
+        }
     }
 
     func move(to rawPoint: CGPoint) {
@@ -831,21 +885,18 @@ final class Runner {
             last = target
             return
         }
+        // One Core Animation run rather than sixty dispatched frames. The old
+        // arc was drawn by scheduling a setFrameOrigin per frame, and anything
+        // else happening on the main thread showed up as a stutter; handing the
+        // whole move to the animator keeps it smooth and costs one call.
         CallaOverlay.shared.setThinking(true, step: step, text: "Moving to the next control…")
         CallaOverlay.shared.status("Calla — moving")
-        let seconds = 0.9
-        let frames = Int(seconds * 60)
-        for frame in 0...frames {
-            let raw = Double(frame) / Double(frames)
-            let eased = raw < 0.5 ? 4 * raw * raw * raw : 1 - pow(-2 * raw + 2, 3) / 2
-            DispatchQueue.main.asyncAfter(deadline: .now() + seconds * raw) {
-                MainActor.assumeIsolated {
-                    CallaOverlay.shared.move(to: arc(from, target, CGFloat(eased)))
-                    if frame == frames {
-                        CallaOverlay.shared.setThinking(false, step: step, text: text)
-                        CallaOverlay.shared.status(status)
-                    }
-                }
+        let seconds = 0.5
+        CallaOverlay.shared.glide(from: from, to: target, duration: seconds)
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
+            MainActor.assumeIsolated {
+                CallaOverlay.shared.setThinking(false, step: step, text: text)
+                CallaOverlay.shared.status(status)
             }
         }
         last = target
