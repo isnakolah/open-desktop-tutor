@@ -129,6 +129,9 @@ final class TutorHostController: ObservableObject {
         guard request.protocolVersion == TutorProtocolVersion.current else {
             return failure(request, "unsupported_version", "Tutor protocol version 2 is required")
         }
+        // Recorded before any validation: the menu needs to show that Calla is
+        // reaching this Mac even when what it sent was refused.
+        BackendStatus.shared.noteRequest(operation: request.operation)
         guard request.sessionID.count >= 8 else { return failure(request, "invalid_session", "A valid teaching session is required") }
         guard captureActive else { return failure(request, "capture_paused", "Capture is paused locally") }
         do {
@@ -909,6 +912,8 @@ final class PointerOverlay {
                          "width": window.width, "height": window.height],
               "owner": owner,
               "dim": TutorSettings.shared.dimNearPointer,
+              "cursor_size": TutorSettings.shared.cursorSize,
+              "show_hud": TutorSettings.shared.showStatusHUD,
               "step": step, "text": text, "status": status])
     }
 

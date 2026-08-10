@@ -35,9 +35,28 @@ final class TutorSettings: ObservableObject {
         didSet { defaults.set(captureLongEdge, forKey: Key.captureLongEdge) }
     }
 
+    /// Point size of the pointer Calla draws. Larger is easier to follow on a
+    /// dense interface; smaller covers less of it.
+    @Published var cursorSize: Int {
+        didSet { defaults.set(cursorSize, forKey: Key.cursorSize) }
+    }
+
+    /// The small capsule naming what Calla is doing. Useful while learning what
+    /// Calla does, noise once that is obvious.
+    @Published var showStatusHUD: Bool {
+        didSet { defaults.set(showStatusHUD, forKey: Key.showStatusHUD) }
+    }
+
+    /// Put the tooltip away when a lesson goes quiet, so an abandoned session
+    /// does not leave words on the screen.
+    @Published var hideTooltipWhenIdle: Bool {
+        didSet { defaults.set(hideTooltipWhenIdle, forKey: Key.hideTooltipWhenIdle) }
+    }
+
     @Published private(set) var screenRecordingGranted = false
 
     static let captureLongEdgeChoices = [1024, 1600, 2048]
+    static let cursorSizeChoices = [24, 30, 38]
     static let defaultAllowedBundleIDs = ["org.blenderfoundation.blender"]
 
     private let defaults: UserDefaults
@@ -46,6 +65,9 @@ final class TutorSettings: ObservableObject {
         static let allowedBundleIDs = "allowedBundleIDs"
         static let dimNearPointer = "dimNearPointer"
         static let captureLongEdge = "captureLongEdge"
+        static let cursorSize = "cursorSize"
+        static let showStatusHUD = "showStatusHUD"
+        static let hideTooltipWhenIdle = "hideTooltipWhenIdle"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -58,6 +80,25 @@ final class TutorSettings: ObservableObject {
         dimNearPointer = defaults.object(forKey: Key.dimNearPointer) as? Bool ?? true
         let edge = defaults.object(forKey: Key.captureLongEdge) as? Int ?? 1600
         captureLongEdge = Self.captureLongEdgeChoices.contains(edge) ? edge : 1600
+        let size = defaults.object(forKey: Key.cursorSize) as? Int ?? 30
+        cursorSize = Self.cursorSizeChoices.contains(size) ? size : 30
+        showStatusHUD = defaults.object(forKey: Key.showStatusHUD) as? Bool ?? true
+        hideTooltipWhenIdle = defaults.object(forKey: Key.hideTooltipWhenIdle) as? Bool ?? false
+    }
+
+    /// Put every choice back to the shipped default, including the allowlist.
+    func resetToDefaults() {
+        allowedBundleIDs = Self.defaultAllowedBundleIDs
+        dimNearPointer = true
+        captureLongEdge = 1600
+        cursorSize = 30
+        showStatusHUD = true
+        hideTooltipWhenIdle = false
+    }
+
+    func openLogs() {
+        let logs = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Logs/Calla")
+        NSWorkspace.shared.open(logs)
     }
 
     /// What a lesson may actually observe: the applications the user allowed,

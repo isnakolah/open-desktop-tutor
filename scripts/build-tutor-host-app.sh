@@ -75,6 +75,7 @@ cat >"$STAGED_APP/Contents/Info.plist" <<'EOF'
 <plist version="1.0"><dict>
   <key>CFBundleDisplayName</key><string>Calla TutorHost</string>
   <key>CFBundleExecutable</key><string>CallaTutorHost</string>
+  <key>CFBundleIconFile</key><string>Calla</string>
   <key>CFBundleIdentifier</key><string>com.calla.tutor-host</string>
   <key>CFBundleName</key><string>Calla TutorHost</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -100,6 +101,30 @@ cat >"$HELPER_APP/Contents/Info.plist" <<'EOF'
   <key>LSUIElement</key><true/>
 </dict></plist>
 EOF
+
+# The icon is rendered from the same artwork Calla draws on screen, so the mark
+# in the Dock, the menu bar, and the pointer over the lesson are one thing.
+# qlmanage is the SVG rasteriser every Mac already has.
+ICON_SOURCE="$REPOSITORY_ROOT/apps/macos/TutorHost/assets/calla-icon.svg"
+if [[ -f "$ICON_SOURCE" ]]; then
+  ICON_WORK="$STAGING/icon"
+  ICONSET="$ICON_WORK/Calla.iconset"
+  mkdir -p "$ICONSET"
+  cp "$ICON_SOURCE" "$ICON_WORK/calla-icon.svg"
+  (cd "$ICON_WORK" && qlmanage -t -s 1024 -o . calla-icon.svg >/dev/null 2>&1)
+  MASTER="$ICON_WORK/calla-icon.svg.png"
+  if [[ -f "$MASTER" ]]; then
+    for size in 16 32 128 256 512; do
+      sips -z "$size" "$size" "$MASTER" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null 2>&1
+      sips -z "$((size * 2))" "$((size * 2))" "$MASTER" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null 2>&1
+    done
+    mkdir -p "$STAGED_APP/Contents/Resources"
+    iconutil -c icns "$ICONSET" -o "$STAGED_APP/Contents/Resources/Calla.icns" 2>/dev/null \
+      || echo "note: could not build Calla.icns; the app will use the generic icon" >&2
+  else
+    echo "note: could not rasterise $ICON_SOURCE; the app will use the generic icon" >&2
+  fi
+fi
 
 # Ad-hoc signing with a stable identifier, inner bundle first, so the host shows
 # up under one name in System Settings rather than accumulating an entry per

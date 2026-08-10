@@ -92,13 +92,18 @@ struct CallaCursor: View {
     static let gradient = LinearGradient(
         colors: [Color(red: 0.13, green: 0.83, blue: 1.0), Color(red: 0.0, green: 0.50, blue: 0.94)],
         startPoint: UnitPoint(x: 0.08, y: 0.06), endPoint: UnitPoint(x: 0.86, y: 0.82))
-    static let size = CGSize(width: 30, height: 30)
+    /// The panel is always built at the largest size a user can pick, because a
+    /// rebuilt panel would never composite. Changing the size re-renders the
+    /// artwork inside that panel instead.
+    static let maxSize: CGFloat = 38
+    static let defaultSize: CGFloat = 30
 
+    let size: CGFloat
     let thinking: Bool
     @State private var phase: CGFloat = 0
 
     private var join: CGFloat {
-        CallaPointerShape.cornerRadius * 2 * Self.size.width / CallaPointerShape.viewBox
+        CallaPointerShape.cornerRadius * 2 * size / CallaPointerShape.viewBox
     }
 
     var body: some View {
@@ -113,7 +118,10 @@ struct CallaCursor: View {
             CallaPointerShape().fill(Self.gradient)
         }
         .shadow(color: .black.opacity(0.4), radius: 3, x: 0, y: 1)
-        .frame(width: Self.size.width, height: Self.size.height, alignment: .topLeading)
+        .frame(width: size, height: size, alignment: .topLeading)
+        // Pinned to the panel's top-left so the tip stays on the hotspot
+        // whatever size the artwork is drawn at.
+        .frame(width: Self.maxSize, height: Self.maxSize, alignment: .topLeading)
         // Thinking reads as a small, organic tilt rather than a spinner.
         .rotationEffect(.degrees(thinking ? Double(sin(phase) * 6) : 0),
                         anchor: UnitPoint(x: CallaPointerShape.tip.x / CallaPointerShape.viewBox,
@@ -221,19 +229,26 @@ final class CallaOverlay {
     private var proximityAlpha: CGFloat = 1
     private var pointerWatch: Timer?
     private var dimNearPointer = true
+    private var hudEnabled = true
     /// Distance from Calla's pointer at which fading starts and bottoms out.
     private static let fadeBegins: CGFloat = 90
     private static let fadeFloor: CGFloat = 0.12
 
-    /// Local coordinates of the pointer's tip inside its own view.
-    private static let hotspot = CGPoint(
-        x: CallaPointerShape.tip.x / CallaPointerShape.viewBox * CallaCursor.size.width,
-        y: CallaPointerShape.tip.y / CallaPointerShape.viewBox * CallaCursor.size.height)
-    private static let cursorSize = CallaCursor.size
+    /// The size the artwork is currently drawn at, inside a panel that is
+    /// always `CallaCursor.maxSize` square.
+    private var cursorPointSize = CallaCursor.defaultSize
 
-    /// Panel origin that places the arrow tip exactly on `point`.
-    private static func cursorOrigin(for point: CGPoint) -> CGPoint {
-        CGPoint(x: point.x - hotspot.x, y: point.y - (cursorSize.height - hotspot.y))
+    /// Local coordinates of the pointer's tip, measured from the panel's
+    /// top-left, for the size the artwork is drawn at.
+    private var hotspot: CGPoint {
+        CGPoint(x: CallaPointerShape.tip.x / CallaPointerShape.viewBox * cursorPointSize,
+                y: CallaPointerShape.tip.y / CallaPointerShape.viewBox * cursorPointSize)
+    }
+    private static let cursorSize = CGSize(width: CallaCursor.maxSize, height: CallaCursor.maxSize)
+
+    /// Panel origin that places the pointer's tip exactly on `point`.
+    private func cursorOrigin(for point: CGPoint) -> CGPoint {
+        CGPoint(x: point.x - hotspot.x, y: point.y - (Self.cursorSize.height - hotspot.y))
     }
 
     /// Keep the pointer's tip inside the window being taught.
@@ -280,7 +295,7 @@ final class CallaOverlay {
         // runs while Calla is teaching, so a visible pointer is what tells the
         // learner Calla is on. Only the tooltip and the HUD come and go.
         let c = panel(CGRect(origin: park, size: Self.cursorSize))
-        c.contentView = NSHostingView(rootView: CallaCursor(thinking: true))
+        c.contentView = NSHostingView(rootView: CallaCursor(size: cursorPointSize, thinking: true))
         c.orderFrontRegardless(); cursor = c
 
         let t = panel(CGRect(x: park.x, y: park.y, width: 300, height: 100))
@@ -298,7 +313,7 @@ final class CallaOverlay {
 
     func begin(at rawPoint: CGPoint, step: String, text: String, status: String) {
         let point = clamped(rawPoint)
-        cursor?.setFrameOrigin(Self.cursorOrigin(for: point))
+        cursor?.setFrameOrigin(cursorOrigin(for: point))
         tooltip?.setFrame(tooltipFrame(for: point), display: true)
         setThinking(false, step: step, text: text)
         self.status(status)
@@ -342,7 +357,8 @@ final class CallaOverlay {
     private func applyVisibility() {
         let visible = ownerIsFrontmost
         cursor?.alphaValue = visible ? proximityAlpha : 0
-        for panel in [tooltip, hud] { panel?.alphaValue = visible && narrating ? 1 : 0 }
+        tooltip?.alphaValue = visible && narrating ? 1 : 0
+        hud?.alphaValue = visible && narrating && hudEnabled ? 1 : 0
         guard visible else { return }
         for panel in [cursor, tooltip, hud] { panel?.orderFrontRegardless() }
     }
@@ -360,6 +376,19 @@ final class CallaOverlay {
         }
         RunLoop.main.add(timer, forMode: .common)
         pointerWatch = timer
+    }
+
+    /// Apply the owner's overlay preferences. The panels themselves are never
+    /// rebuilt — only what is drawn inside them, and whether the HUD shows.
+    func apply(cursorSize: CGFloat?, showHUD: Bool?) {
+        if let cursorSize, cursorSize != cursorPointSize {
+            cursorPointSize = min(max(cursorSize, 16), CallaCursor.maxSize)
+            cursor?.contentView = NSHostingView(rootView: CallaCursor(size: cursorPointSize, thinking: thinking))
+        }
+        if let showHUD, showHUD != hudEnabled {
+            hudEnabled = showHUD
+            applyVisibility()
+        }
     }
 
     func setDimNearPointer(_ value: Bool) {
@@ -408,13 +437,13 @@ final class CallaOverlay {
 
     func move(to rawPoint: CGPoint) {
         let point = clamped(rawPoint)
-        cursor?.setFrameOrigin(Self.cursorOrigin(for: point))
+        cursor?.setFrameOrigin(cursorOrigin(for: point))
         tooltip?.setFrameOrigin(tooltipFrame(for: point).origin)
     }
 
     func setThinking(_ value: Bool, step: String, text: String) {
         thinking = value
-        cursor?.contentView = NSHostingView(rootView: CallaCursor(thinking: value))
+        cursor?.contentView = NSHostingView(rootView: CallaCursor(size: cursorPointSize, thinking: value))
         tooltip?.contentView = NSHostingView(rootView:
             CallaTooltip(accent: accent, step: step, text: text, thinking: value))
     }
@@ -450,6 +479,8 @@ struct Command: Decodable {
     let window: WindowRect?
     let owner: String?
     let dim: Bool?
+    let cursor_size: Int?
+    let show_hud: Bool?
     let step: String?
     let text: String?
     let status: String?
@@ -570,6 +601,8 @@ Thread.detachNewThread {
                 case "point":
                     guard let x = command.x, let y = command.y else { return }
                     CallaOverlay.shared.setDimNearPointer(command.dim ?? true)
+                    CallaOverlay.shared.apply(cursorSize: command.cursor_size.map(CGFloat.init),
+                                              showHUD: command.show_hud)
                     CallaOverlay.shared.adopt(owner: command.owner, window: command.window.map(cocoa))
                     Runner.shared.point(cocoa(CGPoint(x: x, y: y)),
                                         step: command.step ?? "Calla",

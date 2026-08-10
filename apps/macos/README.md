@@ -22,6 +22,12 @@ verification. No capture is written to disk.
 The menu bar is where this Mac's owner sees and changes what Calla may do.
 Everything there used to be a constant in the source:
 
+- **Whether Calla is actually reachable.** The host never talks to the Gateway
+  itself — the node agent holds that WebSocket — so the menu reports what that
+  agent last logged about its connection, names the Gateway it reached, and
+  shows when Calla last sent this Mac anything. Without it, a lesson that never
+  starts and a lesson nobody asked for look identical from here.
+
 - **Applications Calla may look at.** A lesson names the application it is
   teaching, but the effective allowlist is the intersection with this list, so a
   lesson can narrow the owner's choice and never widen it. "Allow <frontmost
@@ -29,8 +35,10 @@ Everything there used to be a constant in the source:
 - **Capture detail** — the long edge of the window image a lesson sends. Less
   detail keeps more of the screen unreadable off this Mac; more helps the model
   read small labels.
-- **Fade the pointer near mine** — Calla's pointer thins out as the owner's own
-  pointer approaches it.
+- **Pointer size**, **fade the pointer near mine** — Calla's pointer thins out
+  as the owner's own pointer approaches it — and **show the status capsule**.
+- **Reset**, which puts every choice including the allowlist back to the
+  shipped default, and **Logs**, which opens the node agent's log directory.
 - **Screen Recording status**, with a button to the right pane in System
   Settings, so a missing grant is visible here rather than only inside a failed
   tool call.
