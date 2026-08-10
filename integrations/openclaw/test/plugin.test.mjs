@@ -7,7 +7,7 @@ import test from "node:test";
 
 import plugin from "../index.mjs";
 import {handleTutorNodeHostCommand, invokeTutorHost} from "../src/node-host.mjs";
-import {buildTutorEnvelope, findForbiddenCoordinatePath, parsePluginConfig} from "../src/protocol.mjs";
+import {buildTutorEnvelope, findForbiddenCoordinatePath, parsePluginConfig, unwrapNodePayload} from "../src/protocol.mjs";
 
 const targetDescriptor = Object.freeze({
   id: "blender.ui.properties.modifiers_tab",
@@ -551,9 +551,37 @@ test("node reports a typed unavailable result before TutorHost starts", async ()
     }),
     {socketPath: missingSocket, timeoutMs: 500},
   );
-  assert.deepEqual(response, {
+  // The node transport takes a JSON string back, not an object. Returning an
+  // object loses the whole response on the wire.
+  assert.equal(typeof response, "string");
+  assert.deepEqual(JSON.parse(response), {
     ok: false,
     code: "TUTOR_HOST_UNAVAILABLE",
     message: "Calla TutorHost is not running or is not accepting local requests.",
   });
+});
+
+test("a TutorHost response survives the node transport as JSON text", async () => {
+  const socketPath = path.join(os.tmpdir(), `calla-node-${process.pid}-${Date.now()}.sock`);
+  const hostResponse = {
+    request_id: "probe",
+    ok: true,
+    payload: {status: "ok", snapshot_id: "snapshot-1", app_bundle_id: "com.example.app"},
+  };
+  const server = net.createServer((socket) => {
+    socket.once("data", () => socket.end(`${JSON.stringify(hostResponse)}\n`));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const response = await handleTutorNodeHostCommand(
+      buildTutorEnvelope("tutor_observe", {session_id: "session-1234"}),
+      {socketPath, timeoutMs: 2000},
+    );
+    assert.equal(typeof response, "string");
+    assert.deepEqual(JSON.parse(response), hostResponse);
+    // And the Gateway side gets back to the Mac's own payload from there.
+    assert.deepEqual(unwrapNodePayload({ok: true, payloadJSON: response}), hostResponse);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });

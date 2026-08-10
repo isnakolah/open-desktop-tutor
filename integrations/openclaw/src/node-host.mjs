@@ -68,20 +68,26 @@ export async function invokeTutorHost(envelope, options = {}) {
   });
 }
 
+/**
+ * The node transport hands the handler a JSON string and expects one back.
+ * Returning the parsed object instead is silently lossy: the invoke result
+ * comes back `{ok: true, payloadJSON: null}` and the Mac's entire response —
+ * snapshot, capture, error code — never reaches the Gateway.
+ */
 export async function handleTutorNodeHostCommand(rawParams, options = {}) {
   try {
     let envelope = rawParams;
     if (typeof rawParams === "string") {
       envelope = JSON.parse(rawParams);
     }
-    return await invokeTutorHost(envelope, options);
+    return JSON.stringify(await invokeTutorHost(envelope, options));
   } catch (error) {
     if (error && ["ENOENT", "ECONNREFUSED", "EPIPE"].includes(error.code)) {
-      return {
+      return JSON.stringify({
         ok: false,
         code: "TUTOR_HOST_UNAVAILABLE",
         message: "Calla TutorHost is not running or is not accepting local requests.",
-      };
+      });
     }
     throw error;
   }
