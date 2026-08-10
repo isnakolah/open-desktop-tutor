@@ -74,6 +74,11 @@ observe again            ->  the window moved, or the learner acted
 system-prompt guidance, so the model knows to ask for the capture and to point
 rather than describe.
 
+Ask from the Mac itself with the Raycast command in `integrations/raycast/`, or
+from any channel the Gateway is on. Calla teaches the allowlisted application
+you were last using rather than the window you asked from, so triggering it
+never means arranging your windows first.
+
 Guiding draws and never acts. It cannot click, and the Mac refuses a region on
 any operation that can — a pixel rectangle, a raw coordinate, or a region
 attached to an action is rejected at both the Gateway and the Mac.
