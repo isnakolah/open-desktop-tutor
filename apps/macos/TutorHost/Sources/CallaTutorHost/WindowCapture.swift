@@ -35,18 +35,6 @@ enum WindowCapture {
         case encodingFailed
     }
 
-    /// True when Screen Recording has been granted. This is a *second* TCC
-    /// permission, separate from Accessibility, and is checked without
-    /// triggering capture.
-    static func isPermitted() async -> Bool {
-        do {
-            _ = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-            return true
-        } catch {
-            return false
-        }
-    }
-
     static func capture(bundleID: String, processID: pid_t) async throws -> Capture {
         let content: SCShareableContent
         do {

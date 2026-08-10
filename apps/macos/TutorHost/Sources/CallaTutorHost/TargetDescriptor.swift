@@ -22,9 +22,6 @@ struct TargetDescriptor {
     let semanticID: String
     let bundleIDs: [String]
     let accessibilityCandidates: [AccessibilityCandidate]
-    let bridgeSelector: [String: String]
-    let visualIcon: String?
-    let expectedNeighbors: [String]
     let confidence: Confidence
 
     var hasAccessibilityContract: Bool { !accessibilityCandidates.isEmpty }
@@ -100,44 +97,24 @@ extension TargetDescriptor {
         }
 
         var candidates: [AccessibilityCandidate] = []
-        var selector: [String: String] = [:]
-        var icon: String?
-        if case .object(let resolve)? = root["resolve"] {
-            if case .object(let accessibility)? = resolve["accessibility"],
-               case .array(let rawCandidates)? = accessibility["candidates"] {
-                for entry in rawCandidates {
-                    guard case .object(let candidate) = entry else { continue }
-                    var role: String?
-                    if case .string(let value)? = candidate["role"] { role = value }
-                    var labelPattern: BoundedPattern?
-                    if case .string(let value)? = candidate["label_regex"] { labelPattern = BoundedPattern(value) }
-                    var descriptionPattern: BoundedPattern?
-                    if case .string(let value)? = candidate["description_regex"] { descriptionPattern = BoundedPattern(value) }
-                    guard role != nil || labelPattern != nil || descriptionPattern != nil else { continue }
-                    candidates.append(AccessibilityCandidate(role: role,
-                                                             labelPattern: labelPattern,
-                                                             descriptionPattern: descriptionPattern))
-                }
-            }
-            if case .object(let bridge)? = resolve["bridge"], case .object(let raw)? = bridge["selector"] {
-                for (key, value) in raw {
-                    if case .string(let string) = value { selector[key] = string }
-                }
-            }
-            if case .object(let visual)? = resolve["visual"], case .string(let value)? = visual["icon"] {
-                icon = value
+        if case .object(let resolve)? = root["resolve"],
+           case .object(let accessibility)? = resolve["accessibility"],
+           case .array(let rawCandidates)? = accessibility["candidates"] {
+            for entry in rawCandidates {
+                guard case .object(let candidate) = entry else { continue }
+                var role: String?
+                if case .string(let value)? = candidate["role"] { role = value }
+                var labelPattern: BoundedPattern?
+                if case .string(let value)? = candidate["label_regex"] { labelPattern = BoundedPattern(value) }
+                var descriptionPattern: BoundedPattern?
+                if case .string(let value)? = candidate["description_regex"] { descriptionPattern = BoundedPattern(value) }
+                guard role != nil || labelPattern != nil || descriptionPattern != nil else { continue }
+                candidates.append(AccessibilityCandidate(role: role,
+                                                         labelPattern: labelPattern,
+                                                         descriptionPattern: descriptionPattern))
             }
         }
         accessibilityCandidates = candidates
-        bridgeSelector = selector
-        visualIcon = icon
-
-        if case .object(let disambiguate)? = root["disambiguate"],
-           case .array(let neighbors)? = disambiguate["expected_neighbors"] {
-            expectedNeighbors = neighbors.compactMap { if case .string(let value) = $0 { return value } else { return nil } }
-        } else {
-            expectedNeighbors = []
-        }
 
         var point = Confidence.fallbackPoint
         var act = Confidence.fallbackAct
