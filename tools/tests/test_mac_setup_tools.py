@@ -46,7 +46,9 @@ class MacSetupToolTests(unittest.TestCase):
 
     def test_macos_setup_default_node_option_sets_the_node_role(self):
         setup_script = REPOSITORY_ROOT / "scripts" / "setup-macos.sh"
+        bootstrap_script = REPOSITORY_ROOT / "scripts" / "bootstrap-calla-mac.sh"
         source = setup_script.read_text(encoding="utf-8")
+        bootstrap_source = bootstrap_script.read_text(encoding="utf-8")
         help_output = subprocess.run(
             ["bash", str(setup_script), "--help"],
             check=True,
@@ -54,7 +56,10 @@ class MacSetupToolTests(unittest.TestCase):
             text=True,
         ).stdout
         self.assertIn("--install-calla-node", help_output)
-        self.assertIn('"role":"node"', source)
+        self.assertIn("bootstrap-calla-mac.sh\" --install --yes --transport tailscale", source)
+        self.assertIn('TRANSPORT="tailscale"', bootstrap_source)
+        self.assertIn('"role":"node"', bootstrap_source)
+        self.assertIn("calla-node-host.sh", bootstrap_source)
         self.assertIn("--install-openclaw-plugin", source)
 
     def test_addon_zip_has_blender_package_layout(self):

@@ -203,7 +203,7 @@ def install(arguments: argparse.Namespace) -> int:
     if arguments.restart:
         run([binary, "gateway", "restart"])
     print(f"Calla Gateway configuration installed. Backup: {backup}")
-    print("No node was approved automatically. Approve the exact pending Mac node with `openclaw nodes approve`.")
+    print("No Calla node was bound automatically. Review the connected Mac, then rerun this installer with `--node-id EXACT_APPROVED_NODE_ID`.")
     return 0
 
 

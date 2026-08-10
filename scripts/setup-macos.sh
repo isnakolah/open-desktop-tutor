@@ -20,7 +20,7 @@ state.
 Options:
   --check-only                 Check prerequisites without installing or building
   --skip-tests                 Build artifacts without running the test suites
-  --install-calla-node         Explicitly configure this Mac in the safe Calla node role
+  --install-calla-node         Configure the Calla node and connect through private Tailscale
   --install-openclaw-plugin    Backward-compatible alias for --install-calla-node
   --allow-non-macos            CI/developer override for checking the script on Linux
   -h, --help                   Show this help
@@ -123,19 +123,7 @@ if command -v swift >/dev/null 2>&1; then
 fi
 
 if [[ "$INSTALL_CALLA_NODE" -eq 1 ]]; then
-  command -v openclaw >/dev/null 2>&1 || fail "--install-calla-node requires the openclaw CLI"
-  if openclaw plugins inspect desktop-tutor --json >/dev/null 2>&1; then
-    printf 'OpenClaw plugin desktop-tutor is already installed; it was not overwritten.\n'
-  else
-    openclaw plugins install --link "$REPOSITORY_ROOT/integrations/openclaw"
-  fi
-  openclaw plugins enable desktop-tutor
-  calla_node_patch='{"plugins":{"entries":{"desktop-tutor":{"enabled":true,"config":{"role":"node","stateDirectory":"~/.openclaw/calla","requireOwnerIdentity":true}}}}}'
-  printf '%s' "$calla_node_patch" | openclaw config patch --stdin --dry-run >/dev/null
-  printf '%s' "$calla_node_patch" | openclaw config patch --stdin >/dev/null
-  openclaw config validate
-  openclaw plugins inspect desktop-tutor --runtime --json
-  printf 'Configured this Mac in Calla node role; no Gateway tools were registered.\n'
+  "$REPOSITORY_ROOT/scripts/bootstrap-calla-mac.sh" --install --yes --transport tailscale
 fi
 
 step 5 "Manual application steps"
@@ -149,14 +137,13 @@ cat <<EOF
 5. Verify App Pack retrieval:
    make -C "$REPOSITORY_ROOT" PYTHON="$REPOSITORY_ROOT/.venv/bin/python" pack-search QUERY=bevel
 
-OpenClaw is optional for the read-only Blender bridge test. To prepare this Mac
-as the default Calla node role, rerun this script with --install-calla-node.
-For the remote Calla connection, first complete the server and Cloudflare steps
-in README.md, then run:
-  $REPOSITORY_ROOT/scripts/bootstrap-calla-mac.sh --check
+OpenClaw is optional for the read-only Blender bridge test. The quickest remote
+Calla test is private to the tailnet and needs only the Gateway token:
   $REPOSITORY_ROOT/scripts/bootstrap-calla-mac.sh --install --yes
 
-The bootstrap stores secrets in Keychain and starts the local Access TCP proxy.
-Pair the Mac by exact manual approval on the Gateway. End-to-end tutor tools
-remain unavailable until the native TutorHost.app supplies the local Unix socket.
+Or rerun this script with --install-calla-node to build and connect in one
+step. The bootstrap stores the token in Keychain and starts the node host over
+Tailscale WSS. Pair the Mac by exact manual approval on the Gateway.
+End-to-end tutor tools remain unavailable until the native TutorHost.app
+supplies the local Unix socket.
 EOF

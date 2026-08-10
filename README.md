@@ -180,14 +180,45 @@ Update the Mac Keychain immediately after rotation. `status` is ledger-only; `de
 
 ### 4. Mac node and explicit pairing
 
-Securely transfer the current service-token handoff to the Mac, then run:
+#### Fast private test (default)
+
+The default Mac setup is the tailnet-only test route. It needs only the normal
+OpenClaw Gateway token, stores it in the login Keychain, and starts a node host
+over `wss://nomonhomelab.tailec0dca.ts.net:443`; it does not use a Cloudflare
+credential, public DNS, or a public tunnel:
 
 ```bash
-./scripts/bootstrap-calla-mac.sh --check
 ./scripts/bootstrap-calla-mac.sh --install --yes
 ```
 
-The installer prompts for the Cloudflare service-token ID/secret and separate OpenClaw Gateway token. It stores all three in the login Keychain, configures the plugin in `node` mode, and creates `com.calla.openclaw-access-proxy` as a user LaunchAgent.
+The full developer command is similarly simple:
+
+```bash
+./scripts/setup-macos.sh --install-calla-node
+```
+
+On the Gateway, inspect the connected or pending node, then manually bind Calla
+to the exact reviewed ID:
+
+```bash
+openclaw nodes list --json
+python3 tools/calla_openclaw_setup.py --install --yes --node-id EXACT_APPROVED_NODE_ID
+```
+
+The transport proves remote connectivity and pairing; it still returns
+`TUTOR_HOST_UNAVAILABLE` until a real TutorHost is running on the Mac.
+
+#### Cloudflare production transport
+
+After the Access and nested-TLS prerequisites are complete, securely transfer
+the current service-token handoff to the Mac, then run:
+
+```bash
+./scripts/bootstrap-calla-mac.sh --check
+./scripts/bootstrap-calla-mac.sh --transport cloudflare --install --yes
+```
+
+The installer prompts for the Cloudflare service-token ID/secret and separate OpenClaw Gateway token. It stores all three in the login Keychain, configures the plugin in `node` mode, and creates `com.calla.openclaw-access-proxy` plus `com.calla.openclaw-node-host` as user LaunchAgents.
 
 The plist contains only public hostname/listener values. The proxy reads Cloudflare secrets from Keychain immediately before running:
 
@@ -247,7 +278,7 @@ Do not treat passing plugin, tunnel, or installer checks as evidence of the fina
 tools/calla_openclaw_setup.py --check | --install [--yes] | --status | --remove --yes
 scripts/setup-calla-server.sh --check | --install --yes | --status
 tools/calla_cloudflare.py plan | apply --yes | status | rotate-service-token --yes | destroy --yes
-scripts/bootstrap-calla-mac.sh --check | --install --yes | --remove --yes
+scripts/bootstrap-calla-mac.sh [--transport tailscale|cloudflare] --check | --install --yes | --remove --yes
 tools/calla_pack_store.py COMPILED.otpack --state-directory ~/.openclaw/calla
 ```
 
