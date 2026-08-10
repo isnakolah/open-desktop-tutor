@@ -6,7 +6,19 @@ import Foundation
 import SwiftUI
 import TutorProtocol
 
-private let allowlistedBundleIDs: Set<String> = ["org.blenderfoundation.blender"]
+/// Fallback only. The allowlist belongs to the App Pack that authored the
+/// lesson, so the gateway supplies it per request; hardcoding an application
+/// here is what stops a new pack from working without a new build.
+private let defaultAllowlistedBundleIDs: Set<String> = ["org.blenderfoundation.blender"]
+
+private func allowlist(from payload: [String: JSONValue]) -> Set<String> {
+    guard case .array(let ids)? = payload["allowed_bundle_ids"] else { return defaultAllowlistedBundleIDs }
+    let parsed = Set(ids.compactMap { value -> String? in
+        if case .string(let id) = value, !id.isEmpty, id.count <= 255 { return id }
+        return nil
+    })
+    return parsed.isEmpty ? defaultAllowlistedBundleIDs : parsed
+}
 private let maxRequestFrameBytes = 64 * 1024
 private let maxResponseFrameBytes = Int(1.5 * 1024 * 1024)
 private let maxCaptureJPEGBytes = 1024 * 1024
@@ -120,11 +132,13 @@ final class TutorHostController: ObservableObject {
             try validateMacIngress(operation: request.operation, payload: request.payload)
             let payload: [String: JSONValue]
             switch request.operation {
-            case "observe": payload = try engine.observe(request.payload)
+            case "observe": payload = try await engine.observe(request.payload)
+            case "guide": payload = try engine.guide(request.payload)
+            case "narrate": payload = engine.narrate(request.payload)
             case "point": payload = try engine.point(request.payload)
             case "propose_action": payload = try await proposeAction(request.payload)
             case "verify": payload = try engine.verify(request.payload)
-            default: return failure(request, "unsupported_operation", "This TutorHost accepts observe, point, propose_action, and verify only")
+            default: return failure(request, "unsupported_operation", "This TutorHost accepts observe, guide, narrate, point, propose_action, and verify only")
             }
             return TutorResponse(requestID: request.requestID, ok: true, payload: payload, error: nil)
         } catch let hostFailure as TutorHostFailure {
@@ -178,23 +192,33 @@ private func validateMacIngress(operation: String, payload: [String: JSONValue])
     if operation == "observe", payload["include_crop"] != nil {
         throw TutorHostFailure(code: "invalid_capture_request", message: "include_crop was replaced by include_capture in protocol v2")
     }
-    if let path = macForbiddenCoordinatePath(.object(payload), path: "payload", permitNormalizedHint: operation == "point") {
+    // The one normalized region a model may send, and where. Pointing takes it
+    // under `target_hint`; guiding takes it directly, because guiding has no
+    // descriptor to hang it off. Everywhere else a coordinate-shaped key is a
+    // rejection, and neither exemption reaches an operation that can act.
+    let normalizedRegionParent: String?
+    switch operation {
+    case "point": normalizedRegionParent = "payload.target_hint"
+    case "guide": normalizedRegionParent = "payload"
+    default: normalizedRegionParent = nil
+    }
+    if let path = macForbiddenCoordinatePath(.object(payload), path: "payload", normalizedRegionParent: normalizedRegionParent) {
         throw TutorHostFailure(code: "invalid_coordinates", message: "Raw coordinate field \(path) is forbidden")
     }
 }
 
-private func macForbiddenCoordinatePath(_ value: JSONValue, path: String, permitNormalizedHint: Bool) -> String? {
+private func macForbiddenCoordinatePath(_ value: JSONValue, path: String, normalizedRegionParent: String?) -> String? {
     switch value {
     case .object(let object):
         for (key, child) in object {
             let next = "\(path).\(key)"
-            if permitNormalizedHint && path == "payload.target_hint" && key == "region" { continue }
+            if let parent = normalizedRegionParent, path == parent, key == "region" { continue }
             if forbiddenCoordinateKeys.contains(key.lowercased()) { return next }
-            if let found = macForbiddenCoordinatePath(child, path: next, permitNormalizedHint: permitNormalizedHint) { return found }
+            if let found = macForbiddenCoordinatePath(child, path: next, normalizedRegionParent: normalizedRegionParent) { return found }
         }
     case .array(let values):
         for (index, child) in values.enumerated() {
-            if let found = macForbiddenCoordinatePath(child, path: "\(path).\(index)", permitNormalizedHint: permitNormalizedHint) { return found }
+            if let found = macForbiddenCoordinatePath(child, path: "\(path).\(index)", normalizedRegionParent: normalizedRegionParent) { return found }
         }
     default: break
     }
@@ -209,10 +233,13 @@ private enum ResolutionAuthority { case point, action }
 private final class AccessibilityTutorEngine {
     private var snapshots: [String: Snapshot] = [:]
     private let maxSnapshotAge: TimeInterval = 4
+    /// Guiding only draws, so it can wait out a vision round trip that acting
+    /// never would.
+    private let maxGuideSnapshotAge: TimeInterval = 180
     private let bridgeObserver = BlenderBridgeObserver()
 
-    func observe(_ payload: [String: JSONValue]) throws -> [String: JSONValue] {
-        let focused = try focusedAllowlistedApplication()
+    func observe(_ payload: [String: JSONValue]) async throws -> [String: JSONValue] {
+        let focused = try focusedAllowlistedApplication(allowlist(from: payload))
         let snapshot = try makeSnapshot(for: focused)
         snapshots[snapshot.id] = snapshot
         var result: [String: JSONValue] = [
@@ -226,7 +253,7 @@ private final class AccessibilityTutorEngine {
                 throw TutorHostFailure(code: "invalid_capture_request", message: "include_capture must be a boolean")
             }
             if includeCapture {
-                let jpeg = try captureFocusedWindow(snapshot)
+                let jpeg = try await captureFocusedWindow(snapshot)
                 result["capture"] = .object([
                     "snapshot_id": .string(snapshot.id),
                     "mime_type": .string("image/jpeg"),
@@ -237,13 +264,87 @@ private final class AccessibilityTutorEngine {
         return result
     }
 
+    /// Point at a region the model read off the window capture.
+    ///
+    /// This is the path that carries a lesson in an application nobody has
+    /// authored a pack for. There is no descriptor to resolve and no
+    /// Accessibility tree to consult — the model looked at the JPEG it asked
+    /// for, and says where in that window the learner should look. The Mac
+    /// still owns everything that matters: it re-finds the window itself, maps
+    /// the region against the window's *current* geometry, and draws. Nothing
+    /// here can click, and no screen coordinate goes back over the wire.
+    func guide(_ payload: [String: JSONValue]) throws -> [String: JSONValue] {
+        guard let region = try normalizedRegion(payload["region"]) else {
+            throw TutorHostFailure(code: "missing_region", message: "guide requires one normalized region of the observed window")
+        }
+        let window = try liveWindow(for: payload)
+        let frame = CGRect(x: window.frame.minX + window.frame.width * region.left,
+                           y: window.frame.minY + window.frame.height * region.top,
+                           width: max(window.frame.width * region.width, 8),
+                           height: max(window.frame.height * region.height, 8))
+        let step = payload["step"]?.stringValue ?? "Calla"
+        let text = payload["text"]?.stringValue ?? ""
+        let status = payload["status"]?.stringValue ?? "Calla — \(step)"
+        PointerOverlay.shared.point(at: frame, window: window.frame, owner: window.snapshot.appBundleID,
+                                    step: step, text: String(text.prefix(240)), status: status)
+        return [
+            "status": .string("ok"),
+            "guide_receipt": .object([
+                "snapshot_id": .string(window.snapshot.id),
+                "app_bundle_id": .string(window.snapshot.appBundleID),
+                "evidence": .array([.string("model_region_on_live_window")]),
+                "valid_until": .string("next_window_mutation"),
+            ]),
+        ]
+    }
+
+    /// Re-word the tooltip without moving the cursor, so the model can keep
+    /// talking about the control it already pointed at.
+    func narrate(_ payload: [String: JSONValue]) -> [String: JSONValue] {
+        let step = payload["step"]?.stringValue ?? "Calla"
+        let text = payload["text"]?.stringValue ?? ""
+        PointerOverlay.shared.narrate(step: step,
+                                      text: String(text.prefix(240)),
+                                      status: payload["status"]?.stringValue ?? "Calla — \(step)",
+                                      thinking: payload["thinking"]?.boolValue ?? false)
+        return ["status": .string("ok")]
+    }
+
+    /// The window the observation named, located again right now.
+    ///
+    /// Guiding deliberately tolerates a much older observation than acting
+    /// does: a vision round trip over the tailnet takes seconds, and drawing an
+    /// arrow changes nothing. What it will not tolerate is a *different*
+    /// window, so process and window identity must still match, and the region
+    /// is mapped against the geometry read back in this call rather than the
+    /// geometry captured earlier.
+    private func liveWindow(for payload: [String: JSONValue]) throws -> (snapshot: Snapshot, frame: CGRect) {
+        guard case .string(let snapshotID)? = payload["snapshot_id"], let prior = snapshots[snapshotID] else {
+            throw TutorHostFailure(code: "unknown_snapshot", message: "An observation receipt is required before guiding")
+        }
+        guard Date().timeIntervalSince(prior.createdAt) <= maxGuideSnapshotAge else {
+            throw TutorHostFailure(code: "stale_snapshot", message: "The observation receipt is stale; observe again")
+        }
+        let focused = try focusedAllowlistedApplication(allowlist(from: payload))
+        let fresh = try makeSnapshot(for: focused)
+        guard fresh.processID == prior.processID, fresh.windowID == prior.windowID else {
+            throw TutorHostFailure(code: "changed_window", message: "The focused allowlisted window changed after observation")
+        }
+        return (prior, fresh.windowFrame)
+    }
+
     func point(_ payload: [String: JSONValue]) throws -> [String: JSONValue] {
         let target = try resolveFreshTarget(payload, authority: .point, allowHint: true)
         var label: String?
         if case .string(let value)? = payload["label"] { label = value }
         var step = "Calla"
         if case .string(let value)? = payload["step"] { step = value }
-        PointerOverlay.shared.show(at: target.frame, step: step, label: label)
+        PointerOverlay.shared.point(at: target.frame,
+                                    window: target.snapshot.windowFrame,
+                                    owner: target.snapshot.appBundleID,
+                                    step: step,
+                                    text: label ?? target.descriptor.title,
+                                    status: "Calla — \(target.descriptor.title)")
         return ["status": .string("ok"), "resolution_receipt": receipt(for: target)]
     }
 
@@ -283,17 +384,37 @@ private final class AccessibilityTutorEngine {
             }
             hint = nil
         }
-        let focused = try focusedAllowlistedApplication()
+        let focused = try focusedAllowlistedApplication(allowlist(from: payload))
         let fresh = try makeSnapshot(for: focused)
         guard fresh.processID == prior.processID, fresh.windowID == prior.windowID, fresh.windowFrame.equalTo(prior.windowFrame) else {
             throw TutorHostFailure(code: "changed_window", message: "The focused allowlisted window changed after observation")
         }
-        let target = try resolve(descriptor: descriptor, in: focused.element, snapshot: fresh, hint: hint)
         let threshold = authority == .action ? descriptor.actionMinimumConfidence : descriptor.pointMinimumConfidence
-        guard target.confidence >= threshold else {
-            throw TutorHostFailure(code: "unresolved", message: "Local descriptor evidence did not meet the authored confidence threshold")
+        do {
+            let target = try resolve(descriptor: descriptor, in: focused.element, snapshot: fresh, hint: hint)
+            guard target.confidence >= threshold else {
+                throw TutorHostFailure(code: "unresolved", message: "Local descriptor evidence did not meet the authored confidence threshold")
+            }
+            return target
+        } catch let failure as TutorHostFailure where failure.code == "unresolved" || failure.code == "ambiguous_target" {
+            // Applications that render their own interface (Blender draws in
+            // OpenGL) expose no Accessibility elements, so constraining an empty
+            // candidate list by the hint can never resolve. Pointing changes
+            // nothing, so the hint alone may place the cursor there. Acting never
+            // may: `authority == .action` rethrows, and allowHint is false for it.
+            guard authority == .point, let hint else { throw failure }
+            let window = fresh.windowFrame
+            let frame = CGRect(x: window.minX + window.width * hint.left,
+                               y: window.minY + window.height * hint.top,
+                               width: max(window.width * hint.width, 8),
+                               height: max(window.height * hint.height, 8))
+            return ResolvedTarget(element: focused.element,
+                                  frame: frame,
+                                  confidence: min(threshold, 0.75),
+                                  snapshot: fresh,
+                                  descriptor: descriptor,
+                                  evidence: ["visual_hint_only"])
         }
-        return target
     }
 
     func press(_ target: ResolvedTarget) throws {
@@ -363,34 +484,71 @@ private final class AccessibilityTutorEngine {
 
     private func normalizedHint(_ value: JSONValue?) throws -> NormalizedRegion? {
         guard let value else { return nil }
-        guard case .object(let hint) = value, Set(hint.keys) == Set(["region"]),
-              case .object(let region)? = hint["region"], Set(region.keys) == Set(["left", "top", "width", "height"]),
-              let left = region["left"]?.numberValue, let top = region["top"]?.numberValue,
-              let width = region["width"]?.numberValue, let height = region["height"]?.numberValue else {
+        guard case .object(let hint) = value, Set(hint.keys) == Set(["region"]) else {
             throw TutorHostFailure(code: "invalid_target_hint", message: "target_hint must contain one normalized region only")
         }
-        do { return try NormalizedRegion(left: left, top: top, width: width, height: height) }
-        catch let error as DescriptorValidationError { throw TutorHostFailure(code: "invalid_target_hint", message: error.message) }
+        return try normalizedRegion(hint["region"])
     }
 
-    private func focusedAllowlistedApplication() throws -> FocusedApplication {
+    /// A region of the observed window, in [0,1], and nothing else. Rejecting
+    /// any extra key is what keeps a pixel rectangle from arriving dressed as a
+    /// normalized one.
+    private func normalizedRegion(_ value: JSONValue?) throws -> NormalizedRegion? {
+        guard let value else { return nil }
+        guard case .object(let region) = value, Set(region.keys) == Set(["left", "top", "width", "height"]),
+              let left = region["left"]?.numberValue, let top = region["top"]?.numberValue,
+              let width = region["width"]?.numberValue, let height = region["height"]?.numberValue else {
+            throw TutorHostFailure(code: "invalid_region", message: "A region must contain left, top, width, and height only")
+        }
+        do { return try NormalizedRegion(left: left, top: top, width: width, height: height) }
+        catch let error as DescriptorValidationError { throw TutorHostFailure(code: "invalid_region", message: error.message) }
+    }
+
+    private func focusedAllowlistedApplication(_ allowed: Set<String> = defaultAllowlistedBundleIDs) throws -> FocusedApplication {
         guard let app = NSWorkspace.shared.frontmostApplication, let bundleID = app.bundleIdentifier,
-              allowlistedBundleIDs.contains(bundleID) else {
+              allowed.contains(bundleID) else {
             throw TutorHostFailure(code: "app_not_allowed", message: "An allowlisted application must be focused")
         }
         return FocusedApplication(application: app, element: AXUIElementCreateApplication(app.processIdentifier))
     }
 
+    /// Builds the observation receipt without touching Accessibility.
+    ///
+    /// Applications that render their own interface expose no Accessibility
+    /// tree, and AX is a separate TCC grant that silently returns nil when
+    /// stale. The window geometry this host actually needs — id, bounds — comes
+    /// from the window server, which only requires Screen Recording. AX is used
+    /// afterwards, if at all, to resolve elements *within* the window.
     private func makeSnapshot(for focused: FocusedApplication) throws -> Snapshot {
-        guard let window = copyElementAttribute(focused.element, kAXFocusedWindowAttribute as CFString) else {
-            throw TutorHostFailure(code: "no_focused_window", message: "The focused allowlisted application has no focused window")
-        }
-        let frame = try frameAttribute(window)
-        let windowID = try focusedWindowID(processID: focused.application.processIdentifier, frame: frame)
+        let window = try frontmostWindow(processID: focused.application.processIdentifier)
         let version = focused.application.bundleURL.flatMap {
             Bundle(url: $0)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         } ?? "unknown"
-        return Snapshot(processID: focused.application.processIdentifier, windowID: windowID, windowFrame: frame, appBundleID: focused.application.bundleIdentifier ?? "unknown", appVersion: version)
+        return Snapshot(processID: focused.application.processIdentifier,
+                        windowID: window.id,
+                        windowFrame: window.frame,
+                        appBundleID: focused.application.bundleIdentifier ?? "unknown",
+                        appVersion: version)
+    }
+
+    /// The largest on-screen, non-desktop window owned by the process.
+    private func frontmostWindow(processID: pid_t) throws -> (id: CGWindowID, frame: CGRect) {
+        guard let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            throw TutorHostFailure(code: "window_lookup_failed", message: "The window server did not return a window list")
+        }
+        let owned = infos.compactMap { info -> (CGWindowID, CGRect)? in
+            guard (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == processID,
+                  (info[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                  let number = info[kCGWindowNumber as String] as? NSNumber,
+                  let bounds = info[kCGWindowBounds as String] as? NSDictionary,
+                  let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary),
+                  frame.width > 1, frame.height > 1 else { return nil }
+            return (CGWindowID(number.uint32Value), frame)
+        }
+        guard let best = owned.max(by: { $0.1.width * $0.1.height < $1.1.width * $1.1.height }) else {
+            throw TutorHostFailure(code: "no_focused_window", message: "The focused allowlisted application has no on-screen window")
+        }
+        return (best.0, best.1)
     }
 
     private func focusedWindowID(processID: pid_t, frame: CGRect) throws -> CGWindowID {
@@ -410,17 +568,24 @@ private final class AccessibilityTutorEngine {
         return CGWindowID(number.uint32Value)
     }
 
-    private func captureFocusedWindow(_ snapshot: Snapshot) throws -> Data {
-        guard let image = CGWindowListCreateImage(.null, [.optionIncludingWindow], snapshot.windowID, [.boundsIgnoreFraming]) else {
+    /// CGWindowListCreateImage is deprecated and returns nil on current macOS,
+    /// so capture goes through ScreenCaptureKit. Still exactly one window,
+    /// never a display, and never written to disk.
+    private func captureFocusedWindow(_ snapshot: Snapshot) async throws -> Data {
+        do {
+            let capture = try await WindowCapture.capture(bundleID: snapshot.appBundleID,
+                                                          processID: snapshot.processID)
+            guard capture.data.count <= maxCaptureJPEGBytes else {
+                throw TutorHostFailure(code: "capture_too_large", message: "The focused window JPEG exceeds the in-memory capture limit")
+            }
+            return capture.data
+        } catch let failure as TutorHostFailure {
+            throw failure
+        } catch WindowCapture.Failure.notPermitted {
+            throw TutorHostFailure(code: "screen_recording_not_permitted", message: "Screen Recording permission is required to capture the window")
+        } catch {
             throw TutorHostFailure(code: "capture_failed", message: "The focused allowlisted window could not be captured")
         }
-        let bitmap = NSBitmapImageRep(cgImage: image)
-        for compression in [0.82, 0.68, 0.52, 0.36] {
-            if let data = bitmap.representation(using: .jpeg, properties: [.compressionFactor: compression]), data.count <= maxCaptureJPEGBytes {
-                return data
-            }
-        }
-        throw TutorHostFailure(code: "capture_too_large", message: "The focused window JPEG exceeds the in-memory capture limit")
     }
 
     private func resolve(descriptor: UITargetDescriptor, in app: AXUIElement, snapshot: Snapshot, hint: NormalizedRegion?) throws -> ResolvedTarget {
@@ -662,6 +827,13 @@ private func frameAttribute(_ element: AXUIElement) throws -> CGRect {
     return CGRect(origin: origin, size: size)
 }
 
+private func firstWindow(of application: AXUIElement) -> AXUIElement? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &value) == .success,
+          let windows = value as? [AXUIElement] else { return nil }
+    return windows.first
+}
+
 private func descendants(of element: AXUIElement, maxDepth: Int) -> [AXUIElement] {
     guard maxDepth > 0 else { return [] }
     var value: CFTypeRef?
@@ -670,142 +842,78 @@ private func descendants(of element: AXUIElement, maxDepth: Int) -> [AXUIElement
     return children + children.flatMap { descendants(of: $0, maxDepth: maxDepth - 1) }
 }
 
-private struct AICursor: View {
-    private static let arrow = Path { p in
-        p.move(to: CGPoint(x: 2, y: 1))
-        p.addLine(to: CGPoint(x: 2, y: 23))
-        p.addLine(to: CGPoint(x: 7.6, y: 17.8))
-        p.addLine(to: CGPoint(x: 11.1, y: 25.4))
-        p.addLine(to: CGPoint(x: 14.9, y: 23.7))
-        p.addLine(to: CGPoint(x: 11.4, y: 16.3))
-        p.addLine(to: CGPoint(x: 18.8, y: 15.8))
-        p.closeSubpath()
-    }
-
-    var body: some View {
-        Self.arrow
-            .fill(LinearGradient(colors: [Color(red: 1, green: 0.72, blue: 0.25),
-                                          Color(red: 1, green: 0.48, blue: 0)],
-                                 startPoint: .top, endPoint: .bottom))
-            .overlay(Self.arrow.stroke(.white, lineWidth: 1.4))
-            .shadow(color: .black.opacity(0.45), radius: 3, x: 0, y: 1)
-            .frame(width: 22, height: 27)
-    }
-}
-
-private struct PulseRing: View {
-    @State private var expanded = false
-
-    var body: some View {
-        Circle()
-            .stroke(Color(red: 1, green: 0.58, blue: 0).opacity(expanded ? 0 : 0.85), lineWidth: 3)
-            .scaleEffect(expanded ? 1.5 : 0.6)
-            .animation(.easeOut(duration: 1.4).repeatForever(autoreverses: false), value: expanded)
-            .onAppear { expanded = true }
-    }
-}
-
-private struct TutorTooltip: View {
-    let step: String
-    let text: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: "graduationcap.fill")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color(red: 1, green: 0.58, blue: 0))
-                Text(step)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .textCase(.uppercase)
-            }
-            Text(text)
-                .font(.system(size: 13))
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .frame(width: PointerOverlay.tooltipSize.width, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(.regularMaterial)
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(Color(red: 1, green: 0.58, blue: 0).opacity(0.55), lineWidth: 1))
-                .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
-        )
-    }
-}
-
-/// A distinct AI cursor plus a tooltip saying what to do. AppKit windows are
-/// main-actor only and every call site is the @MainActor controller.
+/// Drives the overlay renderer, which runs as a separate process.
+///
+/// AppKit panels never composite from this SwiftUI MenuBarExtra host: they are
+/// assigned a window number and report `isVisible`, but nothing reaches the
+/// screen. The helper is a plain NSApplication that builds its panels during
+/// launch, which is the only arrangement that renders.
 @MainActor
-private final class PointerOverlay {
+final class PointerOverlay {
     static let shared = PointerOverlay()
-    static let tooltipSize = CGSize(width: 300, height: 96)
 
-    private var panels: [NSWindow] = []
+    private var process: Process?
+    private var input: FileHandle?
 
-    /// `frame` is in Accessibility coordinates (top-left origin).
-    func show(at frame: CGRect, step: String = "Calla", label: String? = nil) {
-        hide()
-        let target = Self.cocoaRect(fromAccessibility: frame)
-        let tip = CGPoint(x: target.midX, y: target.midY)
-
-        let ring = Self.panel(CGRect(x: tip.x - 26, y: tip.y - 26, width: 52, height: 52))
-        ring.contentView = NSHostingView(rootView: PulseRing())
-        ring.orderFrontRegardless()
-        panels.append(ring)
-
-        // The cursor's hotspot is its top-left tip, and Cocoa y grows upward.
-        let cursor = Self.panel(CGRect(x: tip.x, y: tip.y - 27, width: 22, height: 27))
-        cursor.contentView = NSHostingView(rootView: AICursor())
-        cursor.orderFrontRegardless()
-        panels.append(cursor)
-
-        guard let label, !label.isEmpty else { return }
-        let tooltip = Self.panel(Self.tooltipFrame(besides: tip))
-        tooltip.contentView = NSHostingView(rootView: TutorTooltip(step: step, text: String(label.prefix(240))))
-        tooltip.orderFrontRegardless()
-        panels.append(tooltip)
+    /// The overlay renderer is a nested application inside the installed
+    /// bundle, and a sibling binary in a build directory. Looking only where the
+    /// installer puts it — or only where the build puts it — is why the cursor
+    /// did not appear in one arrangement or the other.
+    private static func helperURL() -> URL? {
+        let bundle = Bundle.main.bundleURL
+        let beside = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
+            .deletingLastPathComponent()
+        let candidates = [
+            bundle.appendingPathComponent("Contents/Helpers/CallaOverlayHelper.app/Contents/MacOS/CallaOverlayHelper"),
+            bundle.appendingPathComponent("Contents/MacOS/CallaOverlayHelper"),
+            beside.appendingPathComponent("CallaOverlayHelper"),
+        ]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 
-    /// Without this the previous step's cursor and tooltip stay on screen forever.
+    private func ensureRunning() {
+        guard process?.isRunning != true else { return }
+        guard let helper = Self.helperURL() else { return }
+        let task = Process()
+        task.executableURL = helper
+        let pipe = Pipe()
+        task.standardInput = pipe
+        guard (try? task.run()) != nil else { return }
+        process = task
+        input = pipe.fileHandleForWriting
+    }
+
+    private func send(_ command: [String: Any]) {
+        ensureRunning()
+        guard let input,
+              let data = try? JSONSerialization.data(withJSONObject: command) else { return }
+        input.write(data)
+        input.write(Data([10]))
+    }
+
+    /// `frame` and `window` are in screen coordinates with a top-left origin;
+    /// the helper owns the conversion to Cocoa's bottom-left origin.
+    ///
+    /// The window rect and owner travel with every point so the overlay stays
+    /// the taught application's overlay: the tooltip is kept inside that
+    /// window's bounds, and the whole overlay hides whenever the learner is
+    /// looking at something else.
+    func point(at frame: CGRect, window: CGRect, owner: String, step: String, text: String, status: String) {
+        send(["cmd": "point", "x": frame.midX, "y": frame.midY,
+              "window": ["x": window.minX, "y": window.minY,
+                         "width": window.width, "height": window.height],
+              "owner": owner,
+              "step": step, "text": text, "status": status])
+    }
+
+    /// Re-word the tooltip in place. The cursor stays where the last step put
+    /// it, so a lesson can narrate several beats about one control.
+    func narrate(step: String, text: String, status: String, thinking: Bool) {
+        send(["cmd": "narrate", "step": step, "text": text, "status": status, "thinking": thinking])
+    }
+
     func hide() {
-        panels.forEach { $0.orderOut(nil) }
-        panels.removeAll()
-    }
-
-    private static func panel(_ frame: CGRect) -> NSPanel {
-        let panel = NSPanel(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = false
-        panel.ignoresMouseEvents = true
-        panel.level = .floating
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        return panel
-    }
-
-    private static func tooltipFrame(besides tip: CGPoint) -> CGRect {
-        let size = tooltipSize
-        let screen = NSScreen.screens.first { $0.frame.contains(tip) } ?? NSScreen.main ?? NSScreen.screens[0]
-        var x = tip.x + 26
-        if x + size.width > screen.frame.maxX - 8 { x = tip.x - 26 - size.width }
-        x = max(screen.frame.minX + 8, min(x, screen.frame.maxX - size.width - 8))
-        let y = min(max(tip.y - size.height - 6, screen.frame.minY + 8), screen.frame.maxY - size.height - 8)
-        return CGRect(x: x, y: y, width: size.width, height: size.height)
-    }
-
-    /// Accessibility reports a top-left origin with y growing downward; Cocoa
-    /// windows use a bottom-left origin. Without this flip the overlay is drawn
-    /// mirrored about the horizontal axis of the display.
-    private static func cocoaRect(fromAccessibility frame: CGRect) -> CGRect {
-        guard let primary = NSScreen.screens.first else { return frame }
-        return CGRect(x: frame.origin.x,
-                      y: primary.frame.height - frame.origin.y - frame.height,
-                      width: frame.width, height: frame.height)
+        send(["cmd": "hide"])
     }
 }
 
@@ -849,7 +957,7 @@ private final class UnixSocketServer {
             close(descriptor)
             throw TutorHostFailure(code: "socket_path_too_long", message: "The TutorHost socket path is too long")
         }
-        path.withCString { source in
+        _ = path.withCString { source in
             withUnsafeMutablePointer(to: &address.sun_path.0) { destination in strncpy(destination, source, byteCount) }
         }
         let bindResult = withUnsafePointer(to: &address) { pointer in

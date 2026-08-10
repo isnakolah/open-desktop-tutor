@@ -80,6 +80,7 @@ function fakeApi(overrides = {}) {
     hooks: new Map(),
     nodeCommands: [],
     nodePolicies: [],
+    commands: [],
   };
   const api = {
     pluginConfig: {
@@ -106,6 +107,9 @@ function fakeApi(overrides = {}) {
     registerNodeInvokePolicy(policy) {
       registrations.nodePolicies.push(policy);
     },
+    registerCommand(command) {
+      registrations.commands.push(command);
+    },
   };
   return {api, registrations};
 }
@@ -116,11 +120,41 @@ test("gateway role registers semantic tools and policy without a Mac node handle
   plugin.register(api);
   assert.deepEqual(
     registrations.tools.map((tool) => tool.name).sort(),
-    ["tutor_observe", "tutor_point", "tutor_propose_action", "tutor_retrieve", "tutor_verify"],
+    [
+      "tutor_guide",
+      "tutor_narrate",
+      "tutor_observe",
+      "tutor_point",
+      "tutor_propose_action",
+      "tutor_retrieve",
+      "tutor_verify",
+    ],
   );
   assert.equal(registrations.nodeCommands.length, 0);
   assert.deepEqual(registrations.nodePolicies[0].defaultPlatforms, ["macos"]);
   assert.equal(typeof registrations.hooks.get("before_tool_call"), "function");
+});
+
+test("the teaching loop reaches the model as prompt guidance", () => {
+  const {api, registrations} = fakeApi();
+  plugin.register(api);
+  const teach = registrations.commands.find((command) => command.name === "teach");
+  assert.ok(teach, "the gateway role registers /teach");
+
+  const guidance = teach.agentPromptGuidance.map((entry) => entry.text).join("\n");
+  // Without these the model reads state instead of teaching: it never asks for
+  // the capture, and never learns that pointing is available to it.
+  assert.match(guidance, /tutor_observe with include_capture true/);
+  assert.match(guidance, /tutor_guide with a region normalized to that window/);
+  assert.match(guidance, /You cannot click/);
+  for (const entry of teach.agentPromptGuidance) {
+    assert.ok(entry.surfaces.length > 0, "guidance must not carry an empty surface list");
+  }
+
+  const seeded = teach.handler({args: "  bevel a cube  "});
+  assert.equal(seeded.continueAgent, true);
+  assert.match(seeded.text, /bevel a cube/);
+  assert.match(teach.handler({}).text, /focused window/);
 });
 
 test("node role exposes only the paired TutorHost command", () => {
@@ -161,6 +195,110 @@ test("observe tool sends a semantic envelope through the configured paired node"
   assert.equal(calls[0].params.session_id, "session-1234");
   assert.equal(calls[0].params.payload.include_capture, true);
   assert.equal(result.details.state.mode, "OBJECT");
+});
+
+test("a requested capture reaches the model as an image, not as base64 text", async () => {
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]).toString("base64");
+  const {api, registrations} = fakeApi({
+    invoke: async () => ({
+      payload: {
+        status: "ok",
+        snapshot_id: "snapshot-1",
+        capture: {snapshot_id: "snapshot-1", mime_type: "image/jpeg", base64: jpeg},
+      },
+    }),
+  });
+  plugin.register(api);
+  const tool = registrations.tools.find((candidate) => candidate.name === "tutor_observe");
+  const result = await tool.execute("call-1", {session_id: "session-1234", include_capture: true});
+
+  const image = result.content.find((block) => block.type === "image");
+  assert.deepEqual(image, {type: "image", data: jpeg, mimeType: "image/jpeg"});
+  const text = result.content.find((block) => block.type === "text").text;
+  assert.ok(!text.includes(jpeg), "the base64 must not also be pasted into the text block");
+  assert.equal(result.details.capture.delivered_as, "image_content_block");
+});
+
+test("guide carries one normalized region and never a descriptor", async () => {
+  const calls = [];
+  const {api, registrations} = fakeApi({
+    invoke: async (request) => {
+      calls.push(request);
+      return {payload: {status: "ok"}};
+    },
+  });
+  plugin.register(api);
+  const tool = registrations.tools.find((candidate) => candidate.name === "tutor_guide");
+  await tool.execute("call-1", {
+    session_id: "session-1234",
+    snapshot_id: "snapshot-1",
+    region: {left: 0.8, top: 0.2, width: 0.03, height: 0.03},
+    step: "Step 1 of 3",
+    text: "Open the Modifier Properties tab — the wrench icon.",
+  });
+  assert.equal(calls[0].params.operation, "guide");
+  assert.deepEqual(calls[0].params.payload.region, {left: 0.8, top: 0.2, width: 0.03, height: 0.03});
+
+  // A pixel rectangle wearing the region's clothes.
+  assert.throws(
+    () =>
+      buildTutorEnvelope("tutor_guide", {
+        session_id: "session-1234",
+        snapshot_id: "snapshot-1",
+        region: {left: 1420, top: 377, width: 24, height: 24},
+        text: "click here",
+      }),
+    /must be in \[0,1\]/,
+  );
+  // Guiding is the pack-free path; a descriptor there would imply authority it
+  // does not have.
+  assert.throws(
+    () =>
+      buildTutorEnvelope("tutor_guide", {
+        session_id: "session-1234",
+        snapshot_id: "snapshot-1",
+        region: {left: 0.1, top: 0.1, width: 0.1, height: 0.1},
+        text: "click here",
+        target_descriptor: targetDescriptor,
+      }),
+    /never carries a descriptor/,
+  );
+});
+
+test("guide and narrate never reach the approval path that actions do", async () => {
+  const {api, registrations} = fakeApi();
+  plugin.register(api);
+  const policy = registrations.hooks.get("before_tool_call");
+  const requester = {senderIsOwner: true};
+
+  const guide = await policy(
+    {
+      toolName: "tutor_guide",
+      params: {
+        session_id: "session-1234",
+        snapshot_id: "snapshot-1",
+        region: {left: 0.5, top: 0.5, width: 0.1, height: 0.1},
+        text: "Look here.",
+      },
+    },
+    {requester},
+  );
+  assert.equal(guide, undefined);
+
+  const narrate = await policy(
+    {toolName: "tutor_narrate", params: {session_id: "session-1234", text: "Still working that out."}},
+    {requester},
+  );
+  assert.equal(narrate, undefined);
+
+  const blocked = await policy(
+    {
+      toolName: "tutor_guide",
+      params: {session_id: "session-1234", snapshot_id: "snapshot-1", region: {left: 0.5, top: 0.5, width: 0.9, height: 0.1}, text: "x"},
+    },
+    {requester},
+  );
+  assert.equal(blocked.block, true);
 });
 
 test("unconfigured plugin loads but tool execution explains the missing paired node", async () => {

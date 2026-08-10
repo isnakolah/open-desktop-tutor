@@ -52,22 +52,69 @@ The default private endpoint is
 `wss://nomonhomelab.tailec0dca.ts.net:443`. The Gateway itself remains
 loopback-bound; Tailscale Serve supplies the tailnet-only HTTPS proxy.
 
+## How a lesson runs
+
+The default path needs screenshots and nothing else. Accessibility is optional,
+and is only involved when a lesson uses an authored App Pack.
+
+```text
+Mac                          Gateway (the model)
+---                          -------------------
+tutor_observe            ->  one JPEG of the focused window, as an image
+                             the model reads it
+tutor_guide              <-  a region of that window, 0..1, plus one sentence
+Calla's cursor arrives
+there; the tooltip says
+the sentence
+tutor_narrate            <-  new words, same cursor
+observe again            ->  the window moved, or the learner acted
+```
+
+`/teach <what you want to learn>` starts that loop. The plugin ships the loop as
+system-prompt guidance, so the model knows to ask for the capture and to point
+rather than describe.
+
+Guiding draws and never acts. It cannot click, and the Mac refuses a region on
+any operation that can — a pixel rectangle, a raw coordinate, or a region
+attached to an action is rejected at both the Gateway and the Mac.
+
+The overlay stays with the application being taught: the tooltip is kept inside
+that window, and both cursor and tooltip fade out whenever the learner brings
+something else forward, then return with it.
+
 ## Native Mac host
 
-`apps/macos/TutorHost/` is the Swift menu-bar host. It accepts only one
-newline-delimited semantic envelope over an owner-only Unix socket. It never
-accepts coordinates, shell commands, arbitrary Blender Python, or raw typing.
+`apps/macos/TutorHost/` is the Swift menu-bar host, installed as
+`Calla TutorHost.app`. It accepts only one newline-delimited semantic envelope
+over an owner-only Unix socket. It never accepts coordinates, shell commands,
+arbitrary Blender Python, or raw typing.
 
-For the initial Blender 5.2 lesson it can:
+It can:
 
-1. observe the focused Blender window and, only when requested, return an in-memory window JPEG bound to that snapshot;
-2. resolve any installed pack-authored UI descriptor locally and place a coordinate-free overlay receipt;
-3. use a vision region only as a pointing search prior, never as action authority;
-4. request local approval for one pack-authorized semantic click; and
-5. verify the canonical pack-authored detector locally.
+1. observe the focused allowlisted window and, only when requested, return an in-memory window JPEG bound to that snapshot;
+2. guide: place Calla's cursor and tooltip on a model-supplied region of that window, re-finding the window itself first;
+3. narrate: re-word the tooltip without moving the cursor;
+4. resolve any installed pack-authored UI descriptor locally and place a coordinate-free overlay receipt;
+5. request local approval for one pack-authorized semantic click; and
+6. verify the canonical pack-authored detector locally.
 
 The model never receives resolved screen coordinates. The Mac keeps the snapshot,
-target resolution, local approval, detector evidence, and Accessibility action authority.
+window geometry, target resolution, local approval, detector evidence, and
+action authority.
+
+Build and install the host with:
+
+```bash
+./scripts/build-tutor-host-app.sh
+```
+
+macOS asks for Screen Recording the first time a lesson requests a capture, and
+asks again after a rebuild because ad-hoc signing changes the code hash. Check
+the whole path without the Gateway:
+
+```bash
+.venv/bin/python tools/calla_guide_probe.py --bundle-id org.blenderfoundation.blender
+```
 
 ## Blender 5.2 pack
 
@@ -87,9 +134,11 @@ Disk**, then enable **Interface: Open Desktop Tutor Bridge**.
 ```text
 scripts/setup-calla-server.sh --check | --install --yes | --status
 scripts/setup-macos.sh --check-only | --install
+scripts/build-tutor-host-app.sh [--build-only]
 scripts/bootstrap-calla-mac.sh --check | --install --yes | --remove --yes
 tools/calla_openclaw_setup.py --check | --install [--yes] | --status | --remove --yes
 tools/calla_node_enroller.py [--watch]
+tools/calla_guide_probe.py [--bundle-id ID] [--capture-out PATH]
 ```
 
 ## Verification boundary

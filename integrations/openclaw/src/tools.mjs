@@ -46,6 +46,51 @@ const definitions = {
       },
     },
   },
+  tutor_guide: {
+    label: "Tutor Guide",
+    description:
+      "Move the Calla cursor to a region you read off the window capture and say what the learner should do there. This is the pack-free teaching path: no descriptor, no Accessibility, no clicking. Give region normalized to the observed window, and text the learner will read in the tooltip.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["session_id", "snapshot_id", "region", "text"],
+      properties: {
+        ...baseSessionProperty,
+        snapshot_id: {type: "string", minLength: 1},
+        region: {
+          type: "object",
+          additionalProperties: false,
+          required: ["left", "top", "width", "height"],
+          properties: {
+            left: {type: "number", minimum: 0, maximum: 1},
+            top: {type: "number", minimum: 0, maximum: 1},
+            width: {type: "number", exclusiveMinimum: 0, maximum: 1},
+            height: {type: "number", exclusiveMinimum: 0, maximum: 1},
+          },
+        },
+        step: {type: "string", maxLength: 60, description: "Short progress label, for example \"Step 2 of 4\"."},
+        text: {type: "string", minLength: 1, maxLength: 240, description: "One instruction, in the learner's words."},
+        status: {type: "string", maxLength: 80},
+      },
+    },
+  },
+  tutor_narrate: {
+    label: "Tutor Narrate",
+    description:
+      "Re-word the tooltip without moving the cursor. Use it to add a beat about the control you already pointed at, or to say you are still working something out.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["session_id", "text"],
+      properties: {
+        ...baseSessionProperty,
+        step: {type: "string", maxLength: 60},
+        text: {type: "string", minLength: 1, maxLength: 240},
+        status: {type: "string", maxLength: 80},
+        thinking: {type: "boolean", default: false},
+      },
+    },
+  },
   tutor_point: {
     label: "Tutor Point",
     description: "Point the distinct AI cursor at a freshly resolved canonical target_descriptor without moving the system cursor. After capture, a vision model may provide only target_hint.region normalized to the focused window; it is a local search prior, not authority.",
@@ -121,6 +166,33 @@ function jsonResult(payload) {
   };
 }
 
+/**
+ * An observation the model can actually look at.
+ *
+ * The window JPEG has to reach the model as an image block. Serialised into the
+ * JSON text it is both invisible to vision and megabytes of base64 in the
+ * transcript, which is why asking for a capture used to accomplish nothing. The
+ * base64 is lifted out of the text half entirely and sent once, as an image.
+ */
+function observationResult(result) {
+  // One unwrap may leave either the host's payload or its whole response,
+  // depending on how the node transport framed it, so find the capture either
+  // way rather than guessing.
+  const holder = result?.capture ? result : result?.payload?.capture ? result.payload : null;
+  const capture = holder?.capture;
+  if (typeof capture?.base64 !== "string") return jsonResult(result);
+  const {base64, ...captureMetadata} = capture;
+  const redacted = {...holder, capture: {...captureMetadata, delivered_as: "image_content_block"}};
+  const summary = holder === result ? redacted : {...result, payload: redacted};
+  return {
+    content: [
+      {type: "text", text: JSON.stringify(summary, null, 2)},
+      {type: "image", data: base64, mimeType: capture.mime_type || "image/jpeg"},
+    ],
+    details: summary,
+  };
+}
+
 export function createTutorTools(api, config) {
   return Object.entries(definitions).map(([name, definition]) => ({
     name,
@@ -160,7 +232,8 @@ export function createTutorTools(api, config) {
         params: envelope,
         timeoutMs: config.timeoutMs,
       });
-      return jsonResult(unwrapNodePayload(invoked));
+      const result = unwrapNodePayload(invoked);
+      return name === "tutor_observe" ? observationResult(result) : jsonResult(result);
     },
   }));
 }

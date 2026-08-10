@@ -130,15 +130,25 @@ if command -v swift >/dev/null 2>&1; then
 fi
 
 if [[ "$INSTALL_CALLA_NODE" -eq 1 ]]; then
+  # Before the LaunchAgents, so the agent finds an installed bundle rather than
+  # building one on its first run.
+  "$REPOSITORY_ROOT/scripts/build-tutor-host-app.sh" --build-only
   "$REPOSITORY_ROOT/scripts/bootstrap-calla-mac.sh" --install --yes
 fi
 
 step 5 "Ready to teach"
 cat <<EOF
-Open Blender 5.2.x and keep it focused while teaching. `--install` has already
-started the native TutorHost and Calla node over private Tailscale WSS; no
-Gateway login, node ID, or Blender add-on configuration is required. The
-Gateway enrols this Mac automatically.
+Keep the application you want taught focused. \`--install\` has already built
+and installed Calla TutorHost.app and started the Calla node over private
+Tailscale WSS; no Gateway login or node ID is required, and the Gateway enrols
+this Mac automatically.
+
+One macOS permission is required, and it is the only one the screenshot path
+needs: approve Calla TutorHost under
+  System Settings > Privacy & Security > Screen & System Audio Recording
+
+Then check the whole teaching path locally:
+  $REPOSITORY_ROOT/.venv/bin/python $REPOSITORY_ROOT/tools/calla_guide_probe.py --bundle-id org.blenderfoundation.blender
 
 For optional read-only bridge diagnostics, install the generated add-on from
 Blender's Add-ons preferences, then run:

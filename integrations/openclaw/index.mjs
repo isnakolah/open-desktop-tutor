@@ -1,6 +1,7 @@
 import {handleTutorNodeHostCommand} from "./src/node-host.mjs";
 import {createBeforeToolCallPolicy} from "./src/policy.mjs";
 import {NODE_COMMAND, parsePluginConfig} from "./src/protocol.mjs";
+import {createTeachCommand} from "./src/teaching.mjs";
 import {createTutorTools} from "./src/tools.mjs";
 
 const plugin = {
@@ -15,6 +16,10 @@ const plugin = {
       for (const tool of createTutorTools(api, config)) {
         api.registerTool(tool, {name: tool.name});
       }
+
+      // The command carries the teaching loop as prompt guidance, so the model
+      // knows what the tools are for whenever this plugin is loaded.
+      api.registerCommand?.(createTeachCommand());
 
       api.on("before_tool_call", createBeforeToolCallPolicy(config));
 

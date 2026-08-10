@@ -10,6 +10,8 @@ export const CALLA_ROLES = Object.freeze(["gateway", "node", "both"]);
 export const TUTOR_TOOL_NAMES = Object.freeze([
   "tutor_observe",
   "tutor_retrieve",
+  "tutor_guide",
+  "tutor_narrate",
   "tutor_point",
   "tutor_propose_action",
   "tutor_verify",
@@ -18,6 +20,8 @@ export const TUTOR_TOOL_NAMES = Object.freeze([
 const TOOL_TO_OPERATION = Object.freeze({
   tutor_observe: "observe",
   tutor_retrieve: "retrieve",
+  tutor_guide: "guide",
+  tutor_narrate: "narrate",
   tutor_point: "point",
   tutor_propose_action: "propose_action",
   tutor_verify: "verify",
@@ -45,10 +49,16 @@ function requireString(value, name, minimum = 1) {
   return value.trim();
 }
 
-export function findForbiddenCoordinatePath(value, path = [], allowNormalizedHint = false) {
+/**
+ * @param exemptRegionPath the one path, relative to the payload, at which a
+ *   normalized region may appear: `["target_hint", "region"]` for pointing and
+ *   `["region"]` for guiding. Everywhere else a coordinate-shaped key is a
+ *   rejection, and no exemption is ever granted to an operation that can act.
+ */
+export function findForbiddenCoordinatePath(value, path = [], exemptRegionPath = null) {
   if (Array.isArray(value)) {
     for (let index = 0; index < value.length; index += 1) {
-      const found = findForbiddenCoordinatePath(value[index], [...path, String(index)], allowNormalizedHint);
+      const found = findForbiddenCoordinatePath(value[index], [...path, String(index)], exemptRegionPath);
       if (found) return found;
     }
     return null;
@@ -56,30 +66,43 @@ export function findForbiddenCoordinatePath(value, path = [], allowNormalizedHin
   if (!value || typeof value !== "object") return null;
   for (const [key, child] of Object.entries(value)) {
     const next = [...path, key];
-    if (allowNormalizedHint && next.length === 2 && next[0] === "target_hint" && next[1] === "region") continue;
+    if (exemptRegionPath && next.length === exemptRegionPath.length && next.every((part, index) => part === exemptRegionPath[index])) {
+      continue;
+    }
     if (FORBIDDEN_COORDINATE_KEYS.has(key.toLowerCase())) return next.join(".");
-    const found = findForbiddenCoordinatePath(child, next, allowNormalizedHint);
+    const found = findForbiddenCoordinatePath(child, next, exemptRegionPath);
     if (found) return found;
   }
   return null;
+}
+
+/** Where each tool is allowed to carry its one normalized region, if at all. */
+export function exemptRegionPath(toolName, params) {
+  if (toolName === "tutor_point" && params?.target_hint !== undefined) return ["target_hint", "region"];
+  if (toolName === "tutor_guide") return ["region"];
+  return null;
+}
+
+export function validateNormalizedRegion(region, name = "region") {
+  if (!region || typeof region !== "object" || Array.isArray(region) || Object.keys(region).length !== 4) {
+    throw new TypeError(`${name} must contain left, top, width, and height only`);
+  }
+  for (const field of ["left", "top", "width", "height"]) {
+    if (typeof region[field] !== "number" || !Number.isFinite(region[field])) {
+      throw new TypeError(`${name}.${field} must be a finite normalized number`);
+    }
+  }
+  if (region.left < 0 || region.top < 0 || region.width <= 0 || region.height <= 0 || region.left + region.width > 1 || region.top + region.height > 1) {
+    throw new TypeError(`${name} must be in [0,1], have positive size, and remain inside the focused window`);
+  }
+  return region;
 }
 
 export function validateNormalizedTargetHint(value) {
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== 1) {
     throw new TypeError("target_hint must contain a region only");
   }
-  const region = value.region;
-  if (!region || typeof region !== "object" || Array.isArray(region) || Object.keys(region).length !== 4) {
-    throw new TypeError("target_hint.region must contain left, top, width, and height only");
-  }
-  for (const field of ["left", "top", "width", "height"]) {
-    if (typeof region[field] !== "number" || !Number.isFinite(region[field])) {
-      throw new TypeError(`target_hint.region.${field} must be a finite normalized number`);
-    }
-  }
-  if (region.left < 0 || region.top < 0 || region.width <= 0 || region.height <= 0 || region.left + region.width > 1 || region.top + region.height > 1) {
-    throw new TypeError("target_hint.region must be in [0,1], have positive size, and remain inside the focused window");
-  }
+  validateNormalizedRegion(value.region, "target_hint.region");
   return value;
 }
 
@@ -94,6 +117,17 @@ export function validateToolPayload(toolName, payload) {
       throw new TypeError("include_capture must be a boolean");
     }
     if (Object.hasOwn(payload, "include_crop")) throw new TypeError("include_crop was replaced by include_capture in protocol v2");
+  }
+  if (toolName === "tutor_guide") {
+    validateNormalizedRegion(payload.region);
+    validateSnapshot(payload.snapshot_id);
+    requireString(payload.text, "text");
+    if (Object.hasOwn(payload, "target_descriptor")) {
+      throw new TypeError("tutor_guide never carries a descriptor; it points at what the model saw in the capture");
+    }
+  }
+  if (toolName === "tutor_narrate") {
+    requireString(payload.text, "text");
   }
   if (toolName === "tutor_point") {
     validateTargetDescriptor(payload.target_descriptor);
@@ -111,7 +145,7 @@ export function validateToolPayload(toolName, payload) {
     validateDetectorDescriptor(payload.detector_descriptor);
     validateSnapshot(payload.snapshot_id);
   }
-  const forbidden = findForbiddenCoordinatePath(payload, [], toolName === "tutor_point" && payload.target_hint !== undefined);
+  const forbidden = findForbiddenCoordinatePath(payload, [], exemptRegionPath(toolName, payload));
   if (forbidden) throw new TypeError(`raw coordinate field ${forbidden} is forbidden; use an App-Pack descriptor`);
   return payload;
 }

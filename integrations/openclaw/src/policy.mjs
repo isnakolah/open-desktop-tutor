@@ -1,4 +1,10 @@
-import {findForbiddenCoordinatePath, TUTOR_TOOL_NAMES, validateNormalizedTargetHint} from "./protocol.mjs";
+import {
+  exemptRegionPath,
+  findForbiddenCoordinatePath,
+  TUTOR_TOOL_NAMES,
+  validateNormalizedRegion,
+  validateNormalizedTargetHint,
+} from "./protocol.mjs";
 
 const TUTOR_TOOLS = new Set(TUTOR_TOOL_NAMES);
 
@@ -13,17 +19,20 @@ export function createBeforeToolCallPolicy(config) {
       };
     }
 
-    if (event.toolName === "tutor_point" && event.params?.target_hint !== undefined) {
-      try {
+    try {
+      if (event.toolName === "tutor_point" && event.params?.target_hint !== undefined) {
         validateNormalizedTargetHint(event.params.target_hint);
-      } catch (error) {
-        return {block: true, blockReason: error.message};
       }
+      if (event.toolName === "tutor_guide") {
+        validateNormalizedRegion(event.params?.region);
+      }
+    } catch (error) {
+      return {block: true, blockReason: error.message};
     }
     const coordinatePath = findForbiddenCoordinatePath(
       event.params,
       [],
-      event.toolName === "tutor_point" && event.params?.target_hint !== undefined,
+      exemptRegionPath(event.toolName, event.params),
     );
     if (coordinatePath) {
       return {
