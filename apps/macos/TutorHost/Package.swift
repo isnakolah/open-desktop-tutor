@@ -5,5 +5,10 @@ let package = Package(
     name: "CallaTutorHost",
     platforms: [.macOS(.v14)],
     products: [.executable(name: "CallaTutorHost", targets: ["CallaTutorHost"])],
-    targets: [.executableTarget(name: "CallaTutorHost")]
+    dependencies: [.package(path: "../../../packages/swift/TutorKit")],
+    targets: [
+        .executableTarget(
+            name: "CallaTutorHost",
+            dependencies: [.product(name: "TutorProtocol", package: "TutorKit")])
+    ]
 )

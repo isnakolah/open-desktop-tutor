@@ -11,7 +11,9 @@ resolve:
   accessibility:
     candidates:
       - role: AXGroup
-        description_regex: "(?i)properties"
+        description_matcher:
+          pattern: properties
+          case_insensitive: true
   visual:
     layout_hint: right_side_editor
 minimum_confidence:

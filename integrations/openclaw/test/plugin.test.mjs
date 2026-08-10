@@ -9,6 +9,70 @@ import plugin from "../index.mjs";
 import {handleTutorNodeHostCommand, invokeTutorHost} from "../src/node-host.mjs";
 import {buildTutorEnvelope, findForbiddenCoordinatePath, parsePluginConfig} from "../src/protocol.mjs";
 
+const targetDescriptor = Object.freeze({
+  id: "blender.ui.properties.modifiers_tab",
+  kind: "ui_target",
+  title: "Modifier Properties tab",
+  aliases: ["Modifiers", "wrench icon", "Modifier Properties"],
+  app_versions: ">=5.2 <5.3",
+  source_refs: ["blender-manual"],
+  region: "blender.ui.properties_editor",
+  resolve: {
+    accessibility: {
+      candidates: [
+        {role: "AXRadioButton", label_matcher: {pattern: "modifier", case_insensitive: true}},
+        {role: "AXButton", description_matcher: {pattern: "modifier", case_insensitive: true}},
+      ],
+    },
+    bridge: {selector: {editor_type: "PROPERTIES", context: "MODIFIER"}},
+    visual: {icon: "wrench", relative_to: "properties_editor.vertical_context_tabs", constraints: ["visible", "enabled"]},
+  },
+  neighbor_constraints: {expected: ["object_data", "particles"]},
+  minimum_confidence: {point: 0.72, act: 0.92},
+  source_file: "ui/modifiers_tab.yaml",
+});
+
+const detectorDescriptor = Object.freeze({
+  id: "blender.detector.properties_context_is_modifier",
+  kind: "detector",
+  title: "Modifier Properties context is open",
+  app_versions: ">=5.2 <5.3",
+  source_refs: ["open-tutor-authored"],
+  provider: "accessibility",
+  query: {target: "blender.ui.properties.modifiers_tab", attribute: "selected", equals: true},
+  source_file: "detectors/core.yaml",
+});
+
+function actionLesson() {
+  return {
+    id: "blender.lesson.bevel_basics",
+    kind: "lesson",
+    title: "Bevel Basics",
+    steps: [{
+      target: targetDescriptor.id,
+      allowed_assistance: [{action: "click", target: targetDescriptor.id}],
+      success: {detector: detectorDescriptor.id},
+    }],
+  };
+}
+
+async function writeDescriptorIndex(stateDirectory) {
+  await fs.mkdir(path.join(stateDirectory, "indexes"));
+  await fs.writeFile(
+    path.join(stateDirectory, "indexes", "blender.json"),
+    JSON.stringify({
+      format: "calla-local-pack-index",
+      format_version: 1,
+      pack: {
+        id: "org.open-desktop-tutor.blender",
+        pack_version: "0.3.0",
+        apps: [{platform: "macos", bundle_ids: ["org.blenderfoundation.blender"], versions: ">=5.2 <5.3", locales: ["en"]}],
+      },
+      entities: [targetDescriptor, detectorDescriptor, actionLesson()],
+    }),
+    "utf8",
+  );
+}
 
 function fakeApi(overrides = {}) {
   const registrations = {
@@ -88,12 +152,14 @@ test("observe tool sends a semantic envelope through the configured paired node"
   const result = await tool.execute("call-1", {
     session_id: "session-1234",
     requested_fields: ["mode", "active_object"],
+    include_capture: true,
   });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].nodeId, "paired-mac");
   assert.equal(calls[0].command, "desktop-tutor.host");
   assert.equal(calls[0].params.operation, "observe");
   assert.equal(calls[0].params.session_id, "session-1234");
+  assert.equal(calls[0].params.payload.include_capture, true);
   assert.equal(result.details.state.mode, "OBJECT");
 });
 
@@ -162,7 +228,7 @@ test("protocol rejects coordinate-shaped authority", () => {
     () =>
       buildTutorEnvelope("tutor_point", {
         session_id: "session-1234",
-        semantic_target: "blender.ui.properties.modifiers_tab",
+        target_descriptor: targetDescriptor,
         snapshot_id: "snapshot-1",
         x: 847,
         y: 291,
@@ -171,73 +237,100 @@ test("protocol rejects coordinate-shaped authority", () => {
   );
 });
 
-
-test("normalised vision hints are accepted only by point, and only within 0..1", () => {
-  const base = {
-    session_id: "session-1234",
-    semantic_target: "blender.ui.properties.modifiers_tab",
-    snapshot_id: "snapshot-1",
-  };
-  const hint = {description: "wrench icon", region: {x: 0.82, y: 0.2, width: 0.04, height: 0.03}};
-
-  // Accepted on point, and the raw-coordinate scan still runs on everything else.
-  const envelope = buildTutorEnvelope("tutor_point", {...base, target_hint: hint});
-  assert.deepEqual(envelope.payload.target_hint, hint);
-
-  // A hint can never authorise an action.
-  assert.throws(
-    () =>
-      buildTutorEnvelope("tutor_propose_action", {
-        ...base,
-        action: "click",
-        expected_state: {},
-        rationale: "open modifiers",
-        target_hint: hint,
-      }),
-    /only by tutor_point/,
-  );
-
-  // Pixel-shaped values masquerading as a hint are rejected.
-  for (const region of [
-    {x: 1420, y: 377, width: 24, height: 24},
-    {x: 0.5, y: 0.5, width: 0.9, height: 0.9},
-    {x: -0.1, y: 0.2, width: 0.1, height: 0.1},
-    {x: 0.1, y: 0.2, width: 0, height: 0.1},
-  ]) {
-    assert.throws(
-      () => buildTutorEnvelope("tutor_point", {...base, target_hint: {description: "d", region}}),
-      /target_hint\.region/,
-      `region should be rejected: ${JSON.stringify(region)}`,
-    );
-  }
-
-  // The exemption is scoped to target_hint; coordinates elsewhere still fail.
-  assert.throws(
-    () => buildTutorEnvelope("tutor_point", {...base, target_hint: hint, x: 847, y: 291}),
-    /raw coordinate field x is forbidden/,
-  );
-});
-
-test("authored target descriptors pass the coordinate rejector unchanged", () => {
-  const descriptor = {
-    semantic_id: "blender.ui.properties.modifiers_tab",
-    bundle_ids: ["org.blenderfoundation.blender"],
-    resolve: {
-      bridge: {selector: {editor_type: "PROPERTIES", context: "MODIFIER"}},
-      accessibility: {candidates: [{role: "AXRadioButton", label_regex: "(?i)modifier"}]},
-      visual: {icon: "wrench"},
+test("Gateway preserves exactly one canonical descriptor and normalized visual hint", async () => {
+  const stateDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "calla-descriptor-test-"));
+  await writeDescriptorIndex(stateDirectory);
+  const calls = [];
+  const {api, registrations} = fakeApi({
+    pluginConfig: {stateDirectory},
+    invoke: async (request) => {
+      calls.push(request);
+      return {payload: {ok: true}};
     },
-    disambiguate: {expected_neighbors: ["object_data", "particles"]},
-    minimum_confidence: {point: 0.72, act: 0.92},
-  };
-  const envelope = buildTutorEnvelope("tutor_point", {
-    session_id: "session-1234",
-    semantic_target: "blender.ui.properties.modifiers_tab",
-    snapshot_id: "snapshot-1",
-    target_descriptor: descriptor,
   });
-  assert.deepEqual(envelope.payload.target_descriptor, descriptor);
+  try {
+    plugin.register(api);
+    const point = registrations.tools.find((candidate) => candidate.name === "tutor_point");
+    await point.execute("call-1", {
+      session_id: "session-1234",
+      target_descriptor: structuredClone(targetDescriptor),
+      snapshot_id: "snapshot-1",
+      target_hint: {region: {left: 0.7, top: 0.1, width: 0.2, height: 0.4}},
+    });
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].params.payload.target_descriptor, targetDescriptor);
+    assert.deepEqual(calls[0].params.payload.target_hint, {region: {left: 0.7, top: 0.1, width: 0.2, height: 0.4}});
+    await assert.rejects(
+      point.execute("call-2", {
+        session_id: "session-1234",
+        target_descriptor: {...targetDescriptor, title: "model replacement"},
+        snapshot_id: "snapshot-1",
+      }),
+      /exactly one installed App-Pack/,
+    );
+    await assert.rejects(
+      point.execute("call-3", {
+        session_id: "session-1234",
+        target_descriptor: targetDescriptor,
+        snapshot_id: "snapshot-1",
+        target_hint: {region: {left: 0.9, top: 0, width: 0.2, height: 0.2}},
+      }),
+      /remain inside the focused window/,
+    );
+  } finally {
+    await fs.rm(stateDirectory, {recursive: true, force: true});
+  }
 });
+
+test("actions reject visual hints and require canonical target plus detector descriptors", async () => {
+  const stateDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "calla-action-descriptor-test-"));
+  await writeDescriptorIndex(stateDirectory);
+  const calls = [];
+  const {api, registrations} = fakeApi({
+    pluginConfig: {stateDirectory},
+    invoke: async (request) => { calls.push(request); return {payload: {ok: true}}; },
+  });
+  try {
+    plugin.register(api);
+    const action = registrations.tools.find((candidate) => candidate.name === "tutor_propose_action");
+    await assert.rejects(
+      action.execute("call-1", {
+        session_id: "session-1234", action: "click", target_descriptor: targetDescriptor, snapshot_id: "snapshot-1",
+        expected_state: detectorDescriptor, rationale: "test", target_hint: {region: {left: 0, top: 0, width: 1, height: 1}},
+      }),
+      /never accepts target_hint/,
+    );
+    await action.execute("call-2", {
+      session_id: "session-1234", action: "click", target_descriptor: structuredClone(targetDescriptor), snapshot_id: "snapshot-1",
+      expected_state: structuredClone(detectorDescriptor), rationale: "test",
+    });
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].params.payload.expected_state, detectorDescriptor);
+  } finally {
+    await fs.rm(stateDirectory, {recursive: true, force: true});
+  }
+});
+
+test("a malformed installed App-Pack index fails closed", async () => {
+  const stateDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "calla-malformed-index-test-"));
+  await fs.mkdir(path.join(stateDirectory, "indexes"));
+  await fs.writeFile(path.join(stateDirectory, "indexes", "damaged.json"), "{not json", "utf8");
+  const {api, registrations} = fakeApi({pluginConfig: {stateDirectory}});
+  try {
+    plugin.register(api);
+    const retrieve = registrations.tools.find((candidate) => candidate.name === "tutor_retrieve");
+    await assert.rejects(
+      retrieve.execute("call-1", {
+        session_id: "session-1234", query: "modifier",
+        application: {bundle_id: "org.blenderfoundation.blender", version: "5.2.0", locale: "en"},
+      }),
+      /index damaged\.json is malformed/,
+    );
+  } finally {
+    await fs.rm(stateDirectory, {recursive: true, force: true});
+  }
+});
+
 
 test("optional owner gate and one-shot action approval are independent", async () => {
   const {api, registrations} = fakeApi({pluginConfig: {requireOwnerIdentity: true}});
@@ -256,7 +349,7 @@ test("optional owner gate and one-shot action approval are independent", async (
       params: {
         session_id: "session-1234",
         action: "click",
-        semantic_target: "blender.ui.properties.modifiers_tab",
+        target_descriptor: targetDescriptor,
       },
     },
     {requester: {senderIsOwner: true}},
@@ -294,7 +387,9 @@ test("node host IPC accepts one envelope and returns one response", async () => 
   try {
     const envelope = buildTutorEnvelope("tutor_verify", {
       session_id: "session-1234",
-      expectation_id: "lesson.step.success",
+      target_descriptor: targetDescriptor,
+      detector_descriptor: detectorDescriptor,
+      snapshot_id: "snapshot-1",
     });
     const response = await invokeTutorHost(envelope, {socketPath, timeoutMs: 2000});
     assert.deepEqual(response, {ok: true, operation: "verify"});
@@ -307,7 +402,12 @@ test("node host IPC accepts one envelope and returns one response", async () => 
 test("node reports a typed unavailable result before TutorHost starts", async () => {
   const missingSocket = path.join(os.tmpdir(), `calla-missing-${process.pid}-${Date.now()}.sock`);
   const response = await handleTutorNodeHostCommand(
-    buildTutorEnvelope("tutor_verify", {session_id: "session-1234", expectation_id: "lesson.step.success"}),
+    buildTutorEnvelope("tutor_verify", {
+      session_id: "session-1234",
+      target_descriptor: targetDescriptor,
+      detector_descriptor: detectorDescriptor,
+      snapshot_id: "snapshot-1",
+    }),
     {socketPath: missingSocket, timeoutMs: 500},
   );
   assert.deepEqual(response, {

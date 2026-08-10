@@ -39,6 +39,9 @@ private func input(
         targetIsFresh: fresh,
         exactWindowIdentityVerified: exactWindow,
         packAllowsAction: true,
+        pointMinimumConfidence: 0.72,
+        actionMinimumConfidence: 0.92,
+        hasIndependentLocalEvidence: true,
         localApproval: approval,
         sensitiveContext: sensitive)
 }
@@ -79,4 +82,22 @@ private func input(
                 approval: .allowOnce,
                 sensitive: .externalSubmission))
             == .deny(reason: "actions are prohibited in sensitive context: externalSubmission"))
+}
+
+@Test func modelHintAloneCannotAuthorizeAnAction() {
+    let proposal = proposal(.click)
+    let denied = ActionPolicy().evaluate(
+        ActionPolicyInput(
+            proposal: proposal,
+            capabilityLevel: .boundedInput,
+            target: target(),
+            targetIsFresh: true,
+            exactWindowIdentityVerified: true,
+            packAllowsAction: true,
+            pointMinimumConfidence: 0.72,
+            actionMinimumConfidence: 0.92,
+            hasIndependentLocalEvidence: false,
+            localApproval: .allowOnce,
+            sensitiveContext: .none))
+    #expect(denied == .deny(reason: "action authority requires independent local evidence"))
 }

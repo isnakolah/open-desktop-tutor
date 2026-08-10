@@ -14,5 +14,34 @@
     "app_versions": {"type": "string", "minLength": 1},
     "source_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
     "text": {"type": "string"}
-  }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"kind": {"const": "ui_target"}}, "required": ["kind"]},
+      "then": {
+        "required": ["resolve", "minimum_confidence"],
+        "properties": {
+          "resolve": {"type": "object", "minProperties": 1},
+          "minimum_confidence": {
+            "type": "object",
+            "required": ["point", "act"],
+            "properties": {
+              "point": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+              "act": {"type": "number", "exclusiveMinimum": 0, "maximum": 1}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"kind": {"const": "detector"}}, "required": ["kind"]},
+      "then": {
+        "required": ["provider", "query"],
+        "properties": {
+          "provider": {"enum": ["blender_bridge", "accessibility"]},
+          "query": {"type": "object", "minProperties": 1}
+        }
+      }
+    }
+  ]
 }

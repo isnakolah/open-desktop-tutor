@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 
-export const PROTOCOL_VERSION = 1;
+import {validateDetectorDescriptor, validateTargetDescriptor} from "./descriptors.mjs";
+
+export const PROTOCOL_VERSION = 2;
 export const NODE_COMMAND = "desktop-tutor.host";
 export const CALLA_ROLES = Object.freeze(["gateway", "node", "both"]);
 export const TUTOR_TOOL_NAMES = Object.freeze([
@@ -28,59 +30,13 @@ const FORBIDDEN_COORDINATE_KEYS = new Set([
   "coordinates",
   "screen_x",
   "screen_y",
+  "left",
+  "top",
+  "width",
+  "height",
+  "bounds",
+  "frame",
 ]);
-
-const HINT_REGION_KEYS = Object.freeze(["x", "y", "width", "height"]);
-const MAX_HINT_DESCRIPTION = 200;
-
-/**
- * A vision model may suggest *where to look* but never *where to click*. A hint
- * is therefore normalised to the captured window (0..1), carries no pixel or
- * screen coordinate, and is accepted only by tutor_point. The Mac re-resolves
- * the real bounds itself, so this stays a search prior rather than an
- * instruction.
- */
-export function validateNormalisedHint(hint) {
-  if (!hint || typeof hint !== "object" || Array.isArray(hint)) {
-    throw new TypeError("target_hint must be an object");
-  }
-  const description = requireString(hint.description, "target_hint.description");
-  if (description.length > MAX_HINT_DESCRIPTION) {
-    throw new TypeError(`target_hint.description must be ${MAX_HINT_DESCRIPTION} characters or fewer`);
-  }
-  const region = hint.region;
-  if (!region || typeof region !== "object" || Array.isArray(region)) {
-    throw new TypeError("target_hint.region must be an object");
-  }
-  const keys = Object.keys(region);
-  if (keys.length !== HINT_REGION_KEYS.length || !HINT_REGION_KEYS.every((key) => keys.includes(key))) {
-    throw new TypeError("target_hint.region must contain exactly x, y, width and height");
-  }
-  for (const key of HINT_REGION_KEYS) {
-    const value = region[key];
-    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
-      throw new TypeError(`target_hint.region.${key} must be a number between 0 and 1`);
-    }
-  }
-  if (region.width <= 0 || region.height <= 0) {
-    throw new TypeError("target_hint.region must have a positive width and height");
-  }
-  if (region.x + region.width > 1 || region.y + region.height > 1) {
-    throw new TypeError("target_hint.region must stay inside the captured window");
-  }
-  return {
-    description,
-    region: {x: region.x, y: region.y, width: region.width, height: region.height},
-  };
-}
-
-/** The hint is validated separately, so exclude it from the coordinate scan
- *  rather than weakening the scan itself. */
-function withoutHint(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-  const {target_hint: _ignored, ...rest} = value;
-  return rest;
-}
 
 function requireString(value, name, minimum = 1) {
   if (typeof value !== "string" || value.trim().length < minimum) {
@@ -89,10 +45,10 @@ function requireString(value, name, minimum = 1) {
   return value.trim();
 }
 
-export function findForbiddenCoordinatePath(value, path = []) {
+export function findForbiddenCoordinatePath(value, path = [], allowNormalizedHint = false) {
   if (Array.isArray(value)) {
     for (let index = 0; index < value.length; index += 1) {
-      const found = findForbiddenCoordinatePath(value[index], [...path, String(index)]);
+      const found = findForbiddenCoordinatePath(value[index], [...path, String(index)], allowNormalizedHint);
       if (found) return found;
     }
     return null;
@@ -100,11 +56,64 @@ export function findForbiddenCoordinatePath(value, path = []) {
   if (!value || typeof value !== "object") return null;
   for (const [key, child] of Object.entries(value)) {
     const next = [...path, key];
+    if (allowNormalizedHint && next.length === 2 && next[0] === "target_hint" && next[1] === "region") continue;
     if (FORBIDDEN_COORDINATE_KEYS.has(key.toLowerCase())) return next.join(".");
-    const found = findForbiddenCoordinatePath(child, next);
+    const found = findForbiddenCoordinatePath(child, next, allowNormalizedHint);
     if (found) return found;
   }
   return null;
+}
+
+export function validateNormalizedTargetHint(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== 1) {
+    throw new TypeError("target_hint must contain a region only");
+  }
+  const region = value.region;
+  if (!region || typeof region !== "object" || Array.isArray(region) || Object.keys(region).length !== 4) {
+    throw new TypeError("target_hint.region must contain left, top, width, and height only");
+  }
+  for (const field of ["left", "top", "width", "height"]) {
+    if (typeof region[field] !== "number" || !Number.isFinite(region[field])) {
+      throw new TypeError(`target_hint.region.${field} must be a finite normalized number`);
+    }
+  }
+  if (region.left < 0 || region.top < 0 || region.width <= 0 || region.height <= 0 || region.left + region.width > 1 || region.top + region.height > 1) {
+    throw new TypeError("target_hint.region must be in [0,1], have positive size, and remain inside the focused window");
+  }
+  return value;
+}
+
+function validateSnapshot(value, name = "snapshot_id") {
+  return requireString(value, name);
+}
+
+export function validateToolPayload(toolName, payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new TypeError("tool parameters must be an object");
+  if (toolName === "tutor_observe") {
+    if (payload.include_capture !== undefined && typeof payload.include_capture !== "boolean") {
+      throw new TypeError("include_capture must be a boolean");
+    }
+    if (Object.hasOwn(payload, "include_crop")) throw new TypeError("include_crop was replaced by include_capture in protocol v2");
+  }
+  if (toolName === "tutor_point") {
+    validateTargetDescriptor(payload.target_descriptor);
+    validateSnapshot(payload.snapshot_id);
+    if (payload.target_hint !== undefined) validateNormalizedTargetHint(payload.target_hint);
+  }
+  if (toolName === "tutor_propose_action") {
+    if (Object.hasOwn(payload, "target_hint")) throw new TypeError("tutor_propose_action never accepts target_hint");
+    validateTargetDescriptor(payload.target_descriptor);
+    validateDetectorDescriptor(payload.expected_state);
+    validateSnapshot(payload.snapshot_id);
+  }
+  if (toolName === "tutor_verify") {
+    validateTargetDescriptor(payload.target_descriptor);
+    validateDetectorDescriptor(payload.detector_descriptor);
+    validateSnapshot(payload.snapshot_id);
+  }
+  const forbidden = findForbiddenCoordinatePath(payload, [], toolName === "tutor_point" && payload.target_hint !== undefined);
+  if (forbidden) throw new TypeError(`raw coordinate field ${forbidden} is forbidden; use an App-Pack descriptor`);
+  return payload;
 }
 
 export function buildTutorEnvelope(toolName, params) {
@@ -113,21 +122,10 @@ export function buildTutorEnvelope(toolName, params) {
   if (!params || typeof params !== "object" || Array.isArray(params)) {
     throw new TypeError("tool parameters must be an object");
   }
-  let hint = null;
-  if (params.target_hint !== undefined) {
-    if (toolName !== "tutor_point") {
-      throw new TypeError("target_hint is accepted only by tutor_point; a hint can never authorise an action");
-    }
-    hint = validateNormalisedHint(params.target_hint);
-  }
-  const forbidden = findForbiddenCoordinatePath(withoutHint(params));
-  if (forbidden) {
-    throw new TypeError(`raw coordinate field ${forbidden} is forbidden; use semantic_target`);
-  }
   const sessionId = requireString(params.session_id, "session_id", 8);
   const payload = {...params};
   delete payload.session_id;
-  if (hint) payload.target_hint = hint;
+  validateToolPayload(toolName, payload);
   return {
     protocol_version: PROTOCOL_VERSION,
     request_id: randomUUID(),
@@ -142,22 +140,16 @@ export function validateNodeEnvelope(value) {
     throw new TypeError("node request must be an object");
   }
   if (value.protocol_version !== PROTOCOL_VERSION) {
-    throw new TypeError("protocol_version must be 1");
+    throw new TypeError("protocol_version must be 2");
   }
   requireString(value.request_id, "request_id", 8);
   requireString(value.session_id, "session_id", 8);
   if (!Object.values(TOOL_TO_OPERATION).includes(value.operation)) {
     throw new TypeError(`unsupported operation: ${String(value.operation)}`);
   }
-  const payload = value.payload;
-  if (payload && typeof payload === "object" && payload.target_hint !== undefined) {
-    if (value.operation !== "point") {
-      throw new TypeError("target_hint is accepted only by the point operation");
-    }
-    validateNormalisedHint(payload.target_hint);
-  }
-  const forbidden = findForbiddenCoordinatePath(withoutHint(payload));
-  if (forbidden) throw new TypeError(`raw coordinate field payload.${forbidden} is forbidden`);
+  const toolName = Object.entries(TOOL_TO_OPERATION).find(([, operation]) => operation === value.operation)?.[0];
+  if (!toolName) throw new TypeError(`unsupported operation: ${String(value.operation)}`);
+  validateToolPayload(toolName, value.payload);
   return value;
 }
 

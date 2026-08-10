@@ -19,10 +19,11 @@ entities:
     title: Modifier Properties context is open
     app_versions: ">=5.2 <5.3"
     source_refs: [open-tutor-authored]
-    provider: blender_bridge
+    provider: accessibility
     query:
-      path: properties_contexts
-      contains: MODIFIER
+      target: blender.ui.properties.modifiers_tab
+      attribute: selected
+      equals: true
   - id: blender.detector.active_object_has_bevel_modifier
     title: Active object has a Bevel modifier
     app_versions: ">=5.2 <5.3"

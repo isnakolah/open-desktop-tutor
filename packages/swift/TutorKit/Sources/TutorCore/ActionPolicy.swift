@@ -38,6 +38,9 @@ public struct ActionPolicyInput: Sendable {
     public let targetIsFresh: Bool
     public let exactWindowIdentityVerified: Bool
     public let packAllowsAction: Bool
+    public let pointMinimumConfidence: Double
+    public let actionMinimumConfidence: Double
+    public let hasIndependentLocalEvidence: Bool
     public let localApproval: LocalApproval
     public let sensitiveContext: SensitiveContext
 
@@ -48,6 +51,9 @@ public struct ActionPolicyInput: Sendable {
         targetIsFresh: Bool,
         exactWindowIdentityVerified: Bool,
         packAllowsAction: Bool,
+        pointMinimumConfidence: Double,
+        actionMinimumConfidence: Double,
+        hasIndependentLocalEvidence: Bool,
         localApproval: LocalApproval,
         sensitiveContext: SensitiveContext)
     {
@@ -57,6 +63,9 @@ public struct ActionPolicyInput: Sendable {
         self.targetIsFresh = targetIsFresh
         self.exactWindowIdentityVerified = exactWindowIdentityVerified
         self.packAllowsAction = packAllowsAction
+        self.pointMinimumConfidence = pointMinimumConfidence
+        self.actionMinimumConfidence = actionMinimumConfidence
+        self.hasIndependentLocalEvidence = hasIndependentLocalEvidence
         self.localApproval = localApproval
         self.sensitiveContext = sensitiveContext
     }
@@ -69,9 +78,6 @@ public enum ActionPolicyDecision: Equatable, Sendable {
 }
 
 public struct ActionPolicy: Sendable {
-    public static let pointConfidence = 0.72
-    public static let mutationConfidence = 0.92
-
     public init() {}
 
     public func evaluate(_ input: ActionPolicyInput) -> ActionPolicyDecision {
@@ -102,7 +108,7 @@ public struct ActionPolicy: Sendable {
         }
 
         if action == .highlight || action == .aiPointer {
-            guard target.confidence >= Self.pointConfidence else {
+            guard target.confidence >= input.pointMinimumConfidence else {
                 return .deny(reason: "target confidence is below the visual-guidance threshold")
             }
             return .allow
@@ -114,8 +120,11 @@ public struct ActionPolicy: Sendable {
         guard input.exactWindowIdentityVerified else {
             return .deny(reason: "exact target window identity is not verified")
         }
-        guard target.confidence >= Self.mutationConfidence else {
+        guard target.confidence >= input.actionMinimumConfidence else {
             return .deny(reason: "target confidence is below the mutation threshold")
+        }
+        guard input.hasIndependentLocalEvidence else {
+            return .deny(reason: "action authority requires independent local evidence")
         }
         guard input.proposal.expectedState != nil else {
             return .deny(reason: "a consequential action requires an authored expected state")

@@ -60,13 +60,14 @@ accepts coordinates, shell commands, arbitrary Blender Python, or raw typing.
 
 For the initial Blender 5.2 lesson it can:
 
-1. observe the focused Blender window;
-2. place a local overlay on Modifier Properties;
-3. request local approval for one semantic click on Modifier Properties; and
-4. verify the selected Properties context.
+1. observe the focused Blender window and, only when requested, return an in-memory window JPEG bound to that snapshot;
+2. resolve any installed pack-authored UI descriptor locally and place a coordinate-free overlay receipt;
+3. use a vision region only as a pointing search prior, never as action authority;
+4. request local approval for one pack-authorized semantic click; and
+5. verify the canonical pack-authored detector locally.
 
-The model never receives the resolved screen coordinates. The Mac keeps the
-snapshot, target resolution, local approval, and Accessibility action authority.
+The model never receives resolved screen coordinates. The Mac keeps the snapshot,
+target resolution, local approval, detector evidence, and Accessibility action authority.
 
 ## Blender 5.2 pack
 

@@ -14,6 +14,13 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+PACKCTL_SOURCE = REPOSITORY_ROOT / "tools" / "packctl" / "src"
+if str(PACKCTL_SOURCE) not in sys.path:
+    sys.path.insert(0, str(PACKCTL_SOURCE))
+
+from open_tutor_pack.descriptors import DescriptorError, validate_descriptor
+
 
 INDEX_FORMAT = "calla-local-pack-index"
 DEFAULT_STATE_DIRECTORY = Path.home() / ".openclaw" / "calla"
@@ -55,6 +62,13 @@ def load_compiled_pack(source: Path) -> tuple[dict[str, Any], list[dict[str, Any
         raise PackStoreError("compiled pack entities must be an array of objects")
     if manifest.get("entity_count") != len(entities):
         raise PackStoreError("compiled pack entity_count does not match entities.json")
+    for index, entity in enumerate(entities):
+        if entity.get("kind") not in {"ui_target", "detector"}:
+            continue
+        try:
+            validate_descriptor(entity, f"compiled entity {index}")
+        except DescriptorError as exc:
+            raise PackStoreError(f"compiled pack contains an invalid descriptor: {exc}") from exc
     return pack, entities
 
 
