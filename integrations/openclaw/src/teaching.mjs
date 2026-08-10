@@ -20,13 +20,20 @@ The loop, every time:
    are one thought, and a separate tutor_await_change costs an entire extra
    model round trip to say nothing but "now wait". The call returns the instant
    the learner acts.
-3. Observe again and guide the next step. Keep going until the goal is reached
-   or the learner says stop. The window moves and the learner acts; a region you
-   measured two steps ago is a guess.
+3. That same guide result comes back with next_observation: a fresh snapshot_id
+   and a new image of the window as it stands now that the learner has acted.
+   Use it. Guide the next step straight from it — do not call tutor_observe
+   again. Only observe when you have no fresh capture, which after the first
+   step means almost never.
+
+Keep going until the goal is reached or the learner says stop. The window moves
+and the learner acts, so a region you measured two steps ago is a guess; the one
+in next_observation is not.
 
 Speed is a feature here. The learner is sitting in front of the screen waiting
-for the arrow to move, and every tool call is a round trip they wait through, so
-two calls a step — observe, guide — is the budget. Specifically:
+for the arrow to move, and every tool call is a round trip they wait through.
+The first step costs two calls, observe then guide. Every step after that costs
+one, because guide already handed you the next picture. Specifically:
 
 - Do not call tutor_narrate as part of a normal step. The text belongs in the
   guide call that moves the cursor. Narrate is for the rare case where you have

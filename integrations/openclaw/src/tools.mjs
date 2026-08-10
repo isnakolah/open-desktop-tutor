@@ -94,6 +94,11 @@ const definitions = {
           description: "Point and then wait for the learner in one call. Leave true: a separate tutor_await_change costs a whole extra round trip.",
         },
         timeout_seconds: {type: "number", minimum: 1, maximum: 25, default: 15},
+        capture_after_change: {
+          type: "boolean",
+          default: true,
+          description: "Return a fresh capture once the learner acts, so the next step needs no separate tutor_observe. Leave true.",
+        },
       },
     },
   },
@@ -221,6 +226,17 @@ function jsonResult(payload) {
  * base64 is lifted out of the text half entirely and sent once, as an image.
  */
 function observationResult(result) {
+  // A guide result nests its fresh look under next_observation.
+  if (result?.next_observation?.capture || result?.payload?.next_observation?.capture) {
+    const holder = result.next_observation ? result : result.payload;
+    const nested = observationResult(holder.next_observation);
+    const {capture, ...rest} = holder.next_observation;
+    const summary = {...result};
+    if (result.next_observation) summary.next_observation = {...rest, capture: undefined};
+    return {...nested, details: summary,
+            content: [{type: "text", text: JSON.stringify(summary, null, 2)},
+                      nested.content.find((block) => block.type === "image")].filter(Boolean)};
+  }
   // One unwrap may leave either the host's payload or its whole response,
   // depending on how the node transport framed it, so find the capture either
   // way rather than guessing.
@@ -286,7 +302,11 @@ export function createTutorTools(api, config) {
         timeoutMs,
       });
       const result = unwrapNodePayload(invoked);
-      return name === "tutor_observe" ? observationResult(result) : jsonResult(result);
+      // guide comes back carrying the next observation, so it has an image in
+      // it for exactly the same reason observe does.
+      if (name === "tutor_observe") return observationResult(result);
+      if (name === "tutor_guide") return observationResult(result);
+      return jsonResult(result);
     },
   }));
 }

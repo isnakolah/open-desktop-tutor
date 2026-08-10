@@ -155,7 +155,8 @@ test("the teaching loop reaches the model as prompt guidance", () => {
   // this whole loop exists to avoid.
   assert.match(guidance, /Never end a turn by asking the learner to tell you when/);
   // Every extra tool call is a round trip the learner sits through.
-  assert.match(guidance, /two calls a step — observe, guide — is the budget/);
+  assert.match(guidance, /Every step after that costs\s+one/);
+  assert.match(guidance, /next_observation/);
   assert.match(guidance, /never try to force it/);
   for (const entry of teach.agentPromptGuidance) {
     assert.ok(entry.surfaces.length > 0, "guidance must not carry an empty surface list");

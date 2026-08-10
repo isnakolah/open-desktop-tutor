@@ -291,6 +291,20 @@ private final class AccessibilityTutorEngine {
             for (key, value) in waited where key != "status" && key != "snapshot_id" {
                 result[key] = value
             }
+            // And hand back what the screen looks like now.
+            //
+            // This is what makes a step cost one round trip instead of two. The
+            // model always needs a fresh look before it can point at the next
+            // thing, and after a wait we are already standing at the moment
+            // worth looking at. Sending the observation back with the wait
+            // saves the learner an entire model call — most of the visible
+            // delay between finishing one step and being shown the next.
+            if payload["capture_after_change"]?.boolValue != false {
+                var next = try await observe(["allowed_bundle_ids": payload["allowed_bundle_ids"] ?? .array([]),
+                                              "include_capture": .bool(true)])
+                next.removeValue(forKey: "status")
+                result["next_observation"] = .object(next)
+            }
         }
         return result
     }
