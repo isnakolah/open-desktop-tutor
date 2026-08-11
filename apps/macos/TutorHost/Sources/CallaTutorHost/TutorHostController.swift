@@ -68,6 +68,11 @@ private struct Snapshot {
     let windowFrame: CGRect
     let appBundleID: String
     let appVersion: String
+    /// The rectangle the image handed to the model actually covered, as
+    /// ScreenCaptureKit reported it. A normalized region is a fraction of *that*
+    /// picture, so this — not the window server's bounds — is what it must be
+    /// mapped back onto. The two are usually identical and occasionally are not.
+    var captureFrame: CGRect?
 }
 
 private struct ResolvedTarget {
@@ -116,6 +121,22 @@ final class TutorHostController: ObservableObject {
 
     func start() async {
         guard socketServer == nil else { return }
+        // One host per Mac.
+        //
+        // A KeepAlive LaunchAgent already runs one, and anything that opens the
+        // bundle as well — the installer, the Dock, a double click — gets a
+        // second. Binding unlinks the socket, so the newcomer silently takes
+        // every request while the first keeps the overlay it had already
+        // started: a lesson drawn by one process and answered by another, and
+        // whichever of them lost the argument took the pointer with it. Stand
+        // down instead of stealing.
+        if Self.liveHostAnswers(at: Self.socketPath) {
+            status = "Another TutorHost is already running"
+            FileHandle.standardError.write(
+                "[calla] another TutorHost already holds \(Self.socketPath); standing down\n".data(using: .utf8)!)
+            NSApp.terminate(nil)
+            return
+        }
         do {
             let server = try UnixSocketServer(path: Self.socketPath) { [weak self] request in
                 guard let self else {
@@ -211,6 +232,31 @@ final class TutorHostController: ObservableObject {
     }
 
     static let socketPath = NSHomeDirectory() + "/Library/Application Support/OpenDesktopTutor/tutor-host.sock"
+
+    /// Whether some other host is already listening.
+    ///
+    /// Connecting is the whole test: a socket file left behind by a host that
+    /// died refuses the connection, so a stale file does not keep a fresh host
+    /// out. Nothing is sent — a probe that spoke the protocol would show up in
+    /// the request log as a lesson that never happened.
+    private static func liveHostAnswers(at path: String) -> Bool {
+        guard FileManager.default.fileExists(atPath: path) else { return false }
+        let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { return false }
+        defer { close(descriptor) }
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let byteCount = path.utf8.count + 1
+        guard byteCount <= MemoryLayout.size(ofValue: address.sun_path) else { return false }
+        _ = path.withCString { source in
+            withUnsafeMutablePointer(to: &address.sun_path.0) { strncpy($0, source, byteCount) }
+        }
+        return withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(descriptor, $0, socklen_t(MemoryLayout<sa_family_t>.size + byteCount)) == 0
+            }
+        }
+    }
 }
 
 private func validateMacIngress(operation: String, payload: [String: JSONValue]) throws {
@@ -281,11 +327,14 @@ private final class AccessibilityTutorEngine {
                 throw TutorHostFailure(code: "invalid_capture_request", message: "include_capture must be a boolean")
             }
             if includeCapture {
-                let jpeg = try await captureFocusedWindow(snapshot)
+                let capture = try await captureFocusedWindow(snapshot)
+                // Remember what the picture covered. Every region the model
+                // sends back is a fraction of this rectangle.
+                snapshots[snapshot.id]?.captureFrame = capture.windowFrame
                 result["capture"] = .object([
                     "snapshot_id": .string(snapshot.id),
                     "mime_type": .string("image/jpeg"),
-                    "base64": .string(jpeg.base64EncodedString()),
+                    "base64": .string(capture.base64),
                 ])
             }
         }
@@ -335,10 +384,23 @@ private final class AccessibilityTutorEngine {
             throw TutorHostFailure(code: "missing_region", message: "guide requires one normalized region of the observed window")
         }
         let window = try liveWindow(for: payload)
-        let frame = CGRect(x: window.frame.minX + window.frame.width * region.left,
-                           y: window.frame.minY + window.frame.height * region.top,
-                           width: max(window.frame.width * region.width, 8),
-                           height: max(window.frame.height * region.height, 8))
+        let picture = pictureFrame(observed: window.snapshot, live: window.frame)
+        let requested = CGRect(x: picture.rect.minX + picture.rect.width * region.left,
+                               y: picture.rect.minY + picture.rect.height * region.top,
+                               width: max(picture.rect.width * region.width, 8),
+                               height: max(picture.rect.height * region.height, 8))
+        var evidence = ["model_region_on_live_window"]
+        var frame = requested
+        // A region read off a JPEG is an estimate; the control under it is a
+        // fact. Where Accessibility can name what is at that spot, point at the
+        // control's own rectangle instead of at the middle of the model's
+        // guess — the difference between landing on a button and landing a
+        // centimetre above it.
+        if let control = controlUnder(requested, in: window.snapshot) {
+            frame = control
+            evidence.append("snapped_to_local_accessibility_element")
+        }
+        if picture.resized { evidence.append("window_resized_since_observation") }
         let step = payload["step"]?.stringValue ?? "Calla"
         let text = payload["text"]?.stringValue ?? ""
         let status = payload["status"]?.stringValue ?? "Calla — \(step)"
@@ -346,15 +408,82 @@ private final class AccessibilityTutorEngine {
         PointerOverlay.shared.point(at: frame, window: window.frame, owner: window.snapshot.appBundleID,
                                     step: step, text: String(text.prefix(240)), status: status,
                                     stepIndex: stepIndex)
-        return [
+        var result: [String: JSONValue] = [
             "status": .string("ok"),
             "guide_receipt": .object([
                 "snapshot_id": .string(window.snapshot.id),
                 "app_bundle_id": .string(window.snapshot.appBundleID),
-                "evidence": .array([.string("model_region_on_live_window")]),
+                "evidence": .array(evidence.map { JSONValue.string($0) }),
                 "valid_until": .string("next_window_mutation"),
             ]),
         ]
+        // Said out loud rather than silently absorbed: a window that is no
+        // longer the size the model saw cannot have regions mapped onto it
+        // faithfully, however the arithmetic is done.
+        if picture.resized { result["window_resized"] = .bool(true) }
+        return result
+    }
+
+    /// The rectangle the picture the model read actually covered, where it is now.
+    ///
+    /// Regions are fractions of the capture, so they must be mapped back onto
+    /// the capture's own rectangle. A window that has since moved carries that
+    /// rectangle with it; a window that has been *resized* has reflowed its
+    /// contents, and no mapping of an old region is truthful — the live frame is
+    /// then the best remaining guess, and the caller says so in the receipt.
+    private func pictureFrame(observed: Snapshot, live: CGRect) -> (rect: CGRect, resized: Bool) {
+        let resized = abs(live.width - observed.windowFrame.width) > 2
+            || abs(live.height - observed.windowFrame.height) > 2
+        guard !resized, let captured = observed.captureFrame else { return (live, resized) }
+        return (captured.offsetBy(dx: live.minX - observed.windowFrame.minX,
+                                  dy: live.minY - observed.windowFrame.minY), false)
+    }
+
+    /// Roles that describe a region of a window rather than a control in it.
+    /// Snapping to one of these would replace a tight guess with a loose fact.
+    private static let containerRoles: Set<String> = [
+        kAXWindowRole, kAXApplicationRole, kAXGroupRole, kAXScrollAreaRole, kAXSplitGroupRole,
+        kAXTabGroupRole, kAXToolbarRole, kAXListRole, kAXTableRole, kAXOutlineRole,
+        kAXSheetRole, kAXDrawerRole, kAXLayoutAreaRole, kAXUnknownRole, "AXWebArea",
+    ]
+
+    /// The smallest Accessibility control the model's rectangle is sitting on.
+    ///
+    /// Hit-tested rather than searched, so it costs one call per sample and no
+    /// tree walk. Everything here is a local fact: the element must belong to
+    /// the process being taught (which is also what stops Calla's own overlay
+    /// from being picked up), must be a control rather than a container, and
+    /// must be near the size the model asked for — a match three times wider
+    /// than the region is a panel behind the button, not the button.
+    private func controlUnder(_ region: CGRect, in snapshot: Snapshot) -> CGRect? {
+        let systemWide = AXUIElementCreateSystemWide()
+        // Accessibility waits six seconds by default for an application that is
+        // busy, and this runs on the thread that answers the socket. A hit test
+        // that cannot be answered promptly is not worth having: give it a fifth
+        // of a second and fall back to the model's own rectangle.
+        AXUIElementSetMessagingTimeout(systemWide, 0.2)
+        let samples = [
+            CGPoint(x: region.midX, y: region.midY),
+            CGPoint(x: region.minX + region.width * 0.3, y: region.minY + region.height * 0.3),
+            CGPoint(x: region.minX + region.width * 0.7, y: region.minY + region.height * 0.3),
+            CGPoint(x: region.minX + region.width * 0.3, y: region.minY + region.height * 0.7),
+            CGPoint(x: region.minX + region.width * 0.7, y: region.minY + region.height * 0.7),
+        ]
+        var best: CGRect?
+        for sample in samples {
+            var element: AXUIElement?
+            guard AXUIElementCopyElementAtPosition(systemWide, Float(sample.x), Float(sample.y), &element) == .success,
+                  let element else { continue }
+            AXUIElementSetMessagingTimeout(element, 0.2)
+            var owner: pid_t = 0
+            guard AXUIElementGetPid(element, &owner) == .success, owner == snapshot.processID else { continue }
+            guard let role = stringAttribute(element, kAXRoleAttribute as CFString),
+                  !Self.containerRoles.contains(role) else { continue }
+            guard let frame = try? frameAttribute(element), frame.width > 1, frame.height > 1 else { continue }
+            guard frame.width <= max(region.width, 28) * 3, frame.height <= max(region.height, 28) * 3 else { continue }
+            if best == nil || frame.width * frame.height < best!.width * best!.height { best = frame }
+        }
+        return best
     }
 
     /// Wait until the learner does something, then say so.
@@ -400,7 +529,9 @@ private final class AccessibilityTutorEngine {
 
     private func thumbprint(_ snapshot: Snapshot) async throws -> [UInt8] {
         do {
-            return try await WindowCapture.thumbprint(bundleID: snapshot.appBundleID, processID: snapshot.processID)
+            return try await WindowCapture.thumbprint(bundleID: snapshot.appBundleID,
+                                                      processID: snapshot.processID,
+                                                      windowID: snapshot.windowID)
         } catch WindowCapture.Failure.notPermitted {
             throw TutorHostFailure(code: "screen_recording_not_permitted",
                                    message: "Screen Recording permission is required to notice the window changing")
@@ -433,7 +564,8 @@ private final class AccessibilityTutorEngine {
         PointerOverlay.shared.narrate(step: step,
                                       text: String(text.prefix(240)),
                                       status: payload["status"]?.stringValue ?? "Calla — \(step)",
-                                      thinking: payload["thinking"]?.boolValue ?? false)
+                                      thinking: payload["thinking"]?.boolValue ?? false,
+                                      holding: payload["holding"]?.boolValue ?? false)
         return ["status": .string("ok")]
     }
 
@@ -717,15 +849,16 @@ private final class AccessibilityTutorEngine {
     /// CGWindowListCreateImage is deprecated and returns nil on current macOS,
     /// so capture goes through ScreenCaptureKit. Still exactly one window,
     /// never a display, and never written to disk.
-    private func captureFocusedWindow(_ snapshot: Snapshot) async throws -> Data {
+    private func captureFocusedWindow(_ snapshot: Snapshot) async throws -> WindowCapture.Capture {
         do {
             let capture = try await WindowCapture.capture(bundleID: snapshot.appBundleID,
                                                           processID: snapshot.processID,
+                                                          windowID: snapshot.windowID,
                                                           longEdge: CGFloat(TutorSettings.shared.captureLongEdge))
             guard capture.data.count <= maxCaptureJPEGBytes else {
                 throw TutorHostFailure(code: "capture_too_large", message: "The focused window JPEG exceeds the in-memory capture limit")
             }
-            return capture.data
+            return capture
         } catch let failure as TutorHostFailure {
             throw failure
         } catch WindowCapture.Failure.notPermitted {
@@ -1051,9 +1184,35 @@ final class PointerOverlay {
     private func send(_ command: [String: Any]) {
         ensureRunning()
         guard let input,
-              let data = try? JSONSerialization.data(withJSONObject: command) else { return }
-        input.write(data)
-        input.write(Data([10]))
+              var data = try? JSONSerialization.data(withJSONObject: command) else { return }
+        data.append(10)
+        // `FileHandle.write` raises an Objective-C exception when the renderer
+        // has gone, and Swift cannot catch that — so the host would die of a
+        // dead overlay, which is exactly backwards. Write the descriptor
+        // directly, and treat a broken pipe as "the renderer needs restarting".
+        guard !Self.writeAll(data, to: input.fileDescriptor) else { return }
+        // One retry with a fresh renderer, so a step is not silently dropped.
+        process?.terminate()
+        process = nil
+        self.input = nil
+        ensureRunning()
+        guard let restarted = self.input else { return }
+        _ = Self.writeAll(data, to: restarted.fileDescriptor)
+    }
+
+    private static func writeAll(_ data: Data, to descriptor: Int32) -> Bool {
+        data.withUnsafeBytes { bytes in
+            var offset = 0
+            while offset < data.count {
+                let written = Darwin.write(descriptor, bytes.baseAddress!.advanced(by: offset), data.count - offset)
+                if written < 0 {
+                    if errno == EINTR { continue }
+                    return false
+                }
+                offset += written
+            }
+            return true
+        }
     }
 
     /// `frame` and `window` are in screen coordinates with a top-left origin;
@@ -1078,8 +1237,14 @@ final class PointerOverlay {
 
     /// Re-word the tooltip in place. The cursor stays where the last step put
     /// it, so a lesson can narrate several beats about one control.
-    func narrate(step: String, text: String, status: String, thinking: Bool) {
-        send(["cmd": "narrate", "step": step, "text": text, "status": status, "thinking": thinking])
+    ///
+    /// `holding` says this is Calla reporting on itself — checking, thinking,
+    /// asking — rather than the next thing for the learner to do. The renderer
+    /// keeps the step and its words in that case, and only lights the working
+    /// line, so waiting never wipes out the instruction being followed.
+    func narrate(step: String, text: String, status: String, thinking: Bool, holding: Bool = false) {
+        send(["cmd": "narrate", "step": step, "text": text, "status": status,
+              "thinking": thinking, "holding": holding])
     }
 
     /// Hand the overlay the route the model worked out before starting, so the
@@ -1170,6 +1335,11 @@ private final class UnixSocketServer {
     private func acceptConnection() {
         let client = accept(fileDescriptor, nil, nil)
         guard client >= 0 else { return }
+        // Per-socket as well as process-wide (see CallaTutorHostApp.init): a
+        // caller that gave up waiting must come back as an error from write,
+        // never as a signal that ends the teaching session.
+        var on: Int32 = 1
+        setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
         // serveConnection is a file-scope function, not a static member: calling a
         // static member of this non-Sendable class from inside a Task makes the
         // region-based isolation checker fail with "pattern that the region-based

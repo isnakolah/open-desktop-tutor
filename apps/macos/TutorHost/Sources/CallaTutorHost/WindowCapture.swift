@@ -48,7 +48,17 @@ enum WindowCapture {
         }
     }
 
-    static func capture(bundleID: String, processID: pid_t, longEdge: CGFloat = defaultLongEdge) async throws -> Capture {
+    /// The window the observation named, as ScreenCaptureKit sees it.
+    ///
+    /// `windowID` is what makes the image and the geometry agree. Both this and
+    /// the observation's own window lookup used to say "the largest window this
+    /// process owns", and the two lists are built differently — an application
+    /// with a full-screen background window behind its document window could
+    /// have the model reading one window while every region was mapped onto
+    /// another, which puts the cursor nowhere near the control. Matching on the
+    /// window server's id removes the guess; the size rule is only a fallback
+    /// for a window that has since been replaced.
+    private static func window(bundleID: String, processID: pid_t, windowID: CGWindowID?) async throws -> SCWindow {
         let content: SCShareableContent
         do {
             content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
@@ -65,9 +75,18 @@ enum WindowCapture {
                 && window.frame.width > 1
                 && window.frame.height > 1
         }
-        guard let window = candidates.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) else {
+        if let windowID, let exact = candidates.first(where: { $0.windowID == windowID }) {
+            return exact
+        }
+        guard let largest = candidates.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) else {
             throw Failure.noMatchingWindow
         }
+        return largest
+    }
+
+    static func capture(bundleID: String, processID: pid_t, windowID: CGWindowID? = nil,
+                        longEdge: CGFloat = defaultLongEdge) async throws -> Capture {
+        let window = try await self.window(bundleID: bundleID, processID: processID, windowID: windowID)
 
         let scale = min(1, longEdge / max(window.frame.width, window.frame.height))
         let configuration = SCStreamConfiguration()
@@ -94,21 +113,8 @@ enum WindowCapture {
     /// Deliberately far too coarse to read: 32x32 greyscale is enough to see a
     /// panel open or a tab change and nowhere near enough to recover text. It
     /// never leaves this Mac either — only the verdict "this changed" does.
-    static func thumbprint(bundleID: String, processID: pid_t) async throws -> [UInt8] {
-        let content: SCShareableContent
-        do {
-            content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        } catch {
-            throw Failure.notPermitted
-        }
-        let candidates = content.windows.filter { window in
-            window.owningApplication?.bundleIdentifier == bundleID
-                && window.owningApplication?.processID == processID
-                && window.isOnScreen && window.frame.width > 1 && window.frame.height > 1
-        }
-        guard let window = candidates.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) else {
-            throw Failure.noMatchingWindow
-        }
+    static func thumbprint(bundleID: String, processID: pid_t, windowID: CGWindowID? = nil) async throws -> [UInt8] {
+        let window = try await self.window(bundleID: bundleID, processID: processID, windowID: windowID)
         let configuration = SCStreamConfiguration()
         configuration.width = 96
         configuration.height = 96
