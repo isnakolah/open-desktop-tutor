@@ -17,6 +17,7 @@ import SwiftUI
 //   {"cmd":"point","x":123,"y":456,"window":{"x":0,"y":0,"width":1,"height":1},
 //    "owner":"com.example.app","step":"Step 1 of 2","text":"...","status":"..."}
 //   {"cmd":"narrate","step":"Step 1 of 2","text":"...","status":"...","thinking":true}
+//   {"cmd":"narrate","text":"Checking your work…","thinking":true,"holding":true}
 //   {"cmd":"plan","steps":["Delete the cube","Add a torus"],"index":0}
 //   {"cmd":"locate"}
 //   {"cmd":"hide"}
@@ -27,6 +28,12 @@ import SwiftUI
 // `window` and `owner` scope the overlay to the application being taught: the
 // tooltip is kept inside that window rather than anywhere on the display, and
 // everything hides while the learner has some other application in front.
+
+/// Calla's own log line. stdout belongs to the host's command channel, so
+/// anything diagnostic has to go to stderr.
+func note(_ message: String) {
+    FileHandle.standardError.write("[calla] \(message)\n".data(using: .utf8)!)
+}
 
 // MARK: - Wallpaper accent
 
@@ -73,19 +80,132 @@ struct CallaPointerShape: Shape {
     /// The tip, in view-box units, after the round join pushes it outward.
     static let tip = CGPoint(x: 70, y: 58)
     static let viewBox: CGFloat = 512
+    /// The four corners, in view-box units. One definition, shared with the
+    /// halo, which has to know where the edges are to run alongside them.
+    static let outline: [CGPoint] = [
+        CGPoint(x: 100, y: 90),
+        CGPoint(x: 418, y: 218),
+        CGPoint(x: 300, y: 298),
+        CGPoint(x: 240, y: 418),
+    ]
+
+    /// The corners in the coordinates of the rect the artwork is drawn in.
+    static func corners(in rect: CGRect) -> [CGPoint] {
+        let scale = min(rect.width, rect.height) / viewBox
+        return outline.map { CGPoint(x: rect.minX + $0.x * scale, y: rect.minY + $0.y * scale) }
+    }
 
     func path(in rect: CGRect) -> Path {
-        let scale = min(rect.width, rect.height) / Self.viewBox
-        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
-            CGPoint(x: rect.minX + x * scale, y: rect.minY + y * scale)
-        }
         var p = Path()
-        p.move(to: point(100, 90))
-        p.addLine(to: point(418, 218))
-        p.addLine(to: point(300, 298))
-        p.addLine(to: point(240, 418))
+        for (index, corner) in Self.corners(in: rect).enumerated() {
+            if index == 0 { p.move(to: corner) } else { p.addLine(to: corner) }
+        }
         p.closeSubpath()
         return p
+    }
+}
+
+/// The pointer's outline, pushed the same distance outward the whole way round.
+///
+/// A scaled-up copy of the artwork cannot do this. The arrow is long and thin,
+/// so scaling it about any point leaves one end of the border miles away and
+/// lays the other end straight over the artwork — which is exactly what made the
+/// old waiting indicator vanish for a third of every lap. Offsetting each edge
+/// along its own normal, and rounding the corners with an arc, keeps the
+/// clearance constant, so a light running along it stays visible all the way.
+struct CallaPointerHalo: Shape {
+    /// Distance outside the artwork's own path, in points.
+    let offset: CGFloat
+
+    func path(in rect: CGRect) -> Path { Self.contour(in: rect, offset: offset).path }
+
+    /// The contour's own perimeter, which is what a dash pattern one lap long
+    /// has to measure. Computed rather than approximated: a pattern that is a
+    /// few percent off its path leaves the light jumping once a lap.
+    static func length(in rect: CGRect, offset: CGFloat) -> CGFloat {
+        contour(in: rect, offset: offset).length
+    }
+
+    private static func contour(in rect: CGRect, offset: CGFloat) -> (path: Path, length: CGFloat) {
+        let corners = CallaPointerShape.corners(in: rect)
+        let count = corners.count
+        // Which way the outline is wound, so a corner can be called convex or
+        // not, and so "outward" means outward rather than into the artwork.
+        var area: CGFloat = 0
+        for index in 0..<count {
+            let a = corners[index], b = corners[(index + 1) % count]
+            area += a.x * b.y - b.x * a.y
+        }
+        let winding: CGFloat = area >= 0 ? 1 : -1
+
+        var directions: [CGPoint] = []
+        var normals: [CGPoint] = []
+        for index in 0..<count {
+            let a = corners[index], b = corners[(index + 1) % count]
+            let delta = CGPoint(x: b.x - a.x, y: b.y - a.y)
+            let length = max(hypot(delta.x, delta.y), 0.0001)
+            directions.append(CGPoint(x: delta.x / length, y: delta.y / length))
+            normals.append(CGPoint(x: delta.y / length * winding, y: -delta.x / length * winding))
+        }
+
+        // Every corner contributes where the offset edge before it ends, where
+        // the one after it starts, and — when the corner turns outward — the arc
+        // that joins them.
+        struct Corner { let entry: CGPoint; let exit: CGPoint; let sweep: CGFloat }
+        var joints: [Corner] = []
+        for index in 0..<count {
+            let previous = (index + count - 1) % count
+            let vertex = corners[index]
+            let entry = CGPoint(x: vertex.x + normals[previous].x * offset,
+                                y: vertex.y + normals[previous].y * offset)
+            let exit = CGPoint(x: vertex.x + normals[index].x * offset,
+                               y: vertex.y + normals[index].y * offset)
+            let turn = directions[previous].x * directions[index].y - directions[previous].y * directions[index].x
+            if turn * winding > 0 {
+                let from = atan2(entry.y - vertex.y, entry.x - vertex.x)
+                let to = atan2(exit.y - vertex.y, exit.x - vertex.x)
+                var sweep = to - from
+                while sweep > .pi { sweep -= 2 * .pi }
+                while sweep < -.pi { sweep += 2 * .pi }
+                joints.append(Corner(entry: entry, exit: exit, sweep: sweep))
+            } else {
+                // Turning inward: the two offset edges cross, and the crossing
+                // is the corner. No arc, or the border would loop back on itself.
+                let meeting = intersection(entry, directions[previous], exit, directions[index])
+                    ?? CGPoint(x: (entry.x + exit.x) / 2, y: (entry.y + exit.y) / 2)
+                joints.append(Corner(entry: meeting, exit: meeting, sweep: 0))
+            }
+        }
+
+        var path = Path()
+        var length: CGFloat = 0
+        path.move(to: joints[0].exit)
+        var cursor = joints[0].exit
+        for step in 1...count {
+            let joint = joints[step % count]
+            path.addLine(to: joint.entry)
+            length += hypot(joint.entry.x - cursor.x, joint.entry.y - cursor.y)
+            if joint.sweep != 0 {
+                let vertex = corners[step % count]
+                let from = atan2(joint.entry.y - vertex.y, joint.entry.x - vertex.x)
+                path.addArc(center: vertex, radius: offset,
+                            startAngle: .radians(Double(from)),
+                            endAngle: .radians(Double(from + joint.sweep)),
+                            clockwise: joint.sweep < 0)
+                length += offset * abs(joint.sweep)
+            }
+            cursor = joint.exit
+        }
+        path.closeSubpath()
+        return (path, length)
+    }
+
+    /// Where two offset edges cross, or nil when they are parallel.
+    private static func intersection(_ a: CGPoint, _ da: CGPoint, _ b: CGPoint, _ db: CGPoint) -> CGPoint? {
+        let denominator = da.x * db.y - da.y * db.x
+        guard abs(denominator) > 0.0001 else { return nil }
+        let t = ((b.x - a.x) * db.y - (b.y - a.y) * db.x) / denominator
+        return CGPoint(x: a.x + da.x * t, y: a.y + da.y * t)
     }
 }
 
@@ -135,30 +255,69 @@ struct CallaCursor: View {
         .frame(width: Self.maxSize, height: Self.maxSize, alignment: .topLeading)
     }
 
-    /// Waiting travels around the pointer's own outline.
+    /// Waiting is one light travelling around the pointer's own border.
     ///
     /// A ring floating near the tip was both easy to miss and half-covered by
-    /// the tooltip. A dashed margin marching around the arrow itself cannot be
-    /// mistaken for anything else on screen, needs no room of its own, and
-    /// belongs unmistakably to the pointer rather than sitting beside it.
+    /// the tooltip. Marching dashes replaced it and read as a selection marquee
+    /// — a thing you are supposed to act on — rather than as progress. One
+    /// segment running the loop reads as loading at a glance, needs no room of
+    /// its own, and belongs unmistakably to the pointer rather than sitting
+    /// beside it. The faint full outline under it is the track the light runs
+    /// on, so the border is legible even at the moment the light is elsewhere.
     private var halo: some View {
-        CallaPointerShape()
-            .stroke(Self.gradient,
-                    style: StrokeStyle(lineWidth: 2.5, lineCap: .round,
-                                       dash: [6, 5], dashPhase: march))
-            .frame(width: size, height: size, alignment: .topLeading)
-            // Grown from the tip, so the margin sits outside the artwork and the
-            // tip itself never appears to move.
-            .scaleEffect(1.34, anchor: UnitPoint(x: CallaPointerShape.tip.x / CallaPointerShape.viewBox,
-                                                 y: CallaPointerShape.tip.y / CallaPointerShape.viewBox))
-            .shadow(color: .black.opacity(0.35), radius: 2)
-            .frame(width: Self.maxSize + Self.ringSize, height: Self.maxSize + Self.ringSize,
-                   alignment: .topLeading)
-            .onAppear {
-                withAnimation(.linear(duration: 0.8).repeatForever(autoreverses: false)) {
-                    march = -22
-                }
+        ZStack(alignment: .topLeading) {
+            // A faint track, so the border still reads as a border at the moment
+            // the light is on the far side of it. Kept well under the light's
+            // weight: drawn any stronger it stops being a track and starts being
+            // a second arrow standing behind the cursor.
+            CallaPointerHalo(offset: haloOffset)
+                .stroke(Color.white.opacity(0.22), style: StrokeStyle(lineWidth: 2.0, lineJoin: .round))
+            // The light. White underneath for the same reason the pointer has
+            // it: this has to read on a dark viewport and a light toolbar alike,
+            // and a lesson points at both.
+            travellingArc(lineWidth: 3.6, colour: AnyShapeStyle(Color.white.opacity(0.95)))
+            travellingArc(lineWidth: 2.2, colour: AnyShapeStyle(Self.gradient))
+                // The glow is what makes it read as motion rather than as a
+                // gap in a dashed line.
+                .shadow(color: Color(red: 0.13, green: 0.83, blue: 1.0).opacity(0.9), radius: 4)
+        }
+        // The same rect the artwork is drawn in: the border is an offset of the
+        // pointer's own outline, not a larger copy of it, so it needs no frame
+        // of its own and the tip cannot appear to move.
+        .frame(width: size, height: size, alignment: .topLeading)
+        .frame(width: Self.maxSize + Self.ringSize, height: Self.maxSize + Self.ringSize,
+               alignment: .topLeading)
+        .onAppear {
+            // One lap per cycle, measured in laps rather than in points, so
+            // changing the cursor size cannot leave the loop with a seam in it.
+            withAnimation(.linear(duration: 1.15).repeatForever(autoreverses: false)) {
+                march = -1
             }
+        }
+    }
+
+    /// How far outside the artwork the border runs: clear of the pointer's own
+    /// white outline — which is `join` wide plus 1.8 — with a little daylight
+    /// left, so the light is never drawn underneath the thing it belongs to.
+    private var haloOffset: CGFloat { join / 2 + 3.1 }
+    /// How much of the border the light occupies. A quarter is long enough to
+    /// see travelling and short enough to leave a clear leading edge.
+    private static let arcFraction: CGFloat = 0.26
+
+    /// Perimeter of the border, in points.
+    private var lap: CGFloat {
+        CallaPointerHalo.length(in: CGRect(x: 0, y: 0, width: size, height: size), offset: haloOffset)
+    }
+
+    /// One dash as long as the light and one gap as long as the rest of the
+    /// border: a single segment, running the loop, with no seam because the
+    /// pattern's period is exactly one lap.
+    private func travellingArc(lineWidth: CGFloat, colour: AnyShapeStyle) -> some View {
+        CallaPointerHalo(offset: haloOffset)
+            .stroke(colour, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round,
+                                               lineJoin: .round,
+                                               dash: [lap * Self.arcFraction, lap * (1 - Self.arcFraction)],
+                                               dashPhase: march * lap))
     }
 }
 
@@ -175,6 +334,10 @@ struct CallaTooltip: View {
     let step: String
     let text: String
     let thinking: Bool
+    /// What Calla is doing, when it is doing something. Shown beside the step
+    /// rather than in place of it, so waiting never costs the learner the
+    /// instruction they are still working through.
+    var working: String? = nil
     /// Bumped by the ⌥⌘/ shortcut to open the question field.
     var startAsking: Int = 0
     var onEvent: ((String, String) -> Void)?
@@ -192,9 +355,10 @@ struct CallaTooltip: View {
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
                 if thinking {
-                    Text("working")
+                    Text(working ?? "working")
                         .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
             Text(text)
@@ -365,7 +529,10 @@ final class CallaOverlay {
     private var pointerIsOver = false
     fileprivate var askingRequested = 0
     fileprivate var currentStep = ""
-    private var currentText = ""
+    fileprivate var currentText = ""
+    /// What Calla is doing right now, shown on the working line. `nil` when it is
+    /// not doing anything — the step's own words are never used for this.
+    private var working: String?
     /// The whole route, laid out before the first step. Held so the tooltip can
     /// say which step this is and what follows, without the model having to
     /// repeat itself every call.
@@ -384,8 +551,7 @@ final class CallaOverlay {
             // question box came straight back after every send.
             CallaOverlay.shared.askOpen = false
             CallaOverlay.shared.askingRequested = 0
-            CallaOverlay.shared.setThinking(true, step: CallaOverlay.shared.currentStep,
-                                            text: "Asking Calla…")
+            CallaOverlay.shared.setWorking("Asking Calla…", status: "Calla — asking")
         }
         let payload: [String: Any] = ["event": event, "text": text]
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
@@ -850,15 +1016,45 @@ final class CallaOverlay {
         planIndex = max(0, min(index, plan.count - 1))
     }
 
+    /// A new beat of the lesson: new words, and no longer waiting on anything.
     func setThinking(_ value: Bool, step: String, text: String) {
         thinking = value
+        working = nil
         currentStep = step
         currentText = text
-        cursor?.contentView = NSHostingView(rootView: CallaCursor(size: cursorPointSize, thinking: value))
+        redraw()
+    }
+
+    /// Say that Calla is busy without disturbing the step.
+    ///
+    /// `nil` means done working. The step, its words and the pointer's position
+    /// are all left alone — this only lights the working line and the pointer's
+    /// marching outline, which is what "loading" should have meant all along.
+    func setWorking(_ text: String?, status: String? = nil) {
+        working = text
+        thinking = text != nil
+        redraw()
+        if let status { self.status(status) }
+    }
+
+    /// Where to wait when no step has said where to point yet: the middle of the
+    /// window being taught, or of the screen when even that is unknown.
+    var restingPoint: CGPoint {
+        if let window { return CGPoint(x: window.midX, y: window.midY) }
+        let screen = NSScreen.main?.frame ?? .zero
+        return CGPoint(x: screen.midX, y: screen.midY)
+    }
+
+    private func redraw() {
+        cursor?.contentView = NSHostingView(rootView: CallaCursor(size: cursorPointSize, thinking: thinking))
         tooltip?.contentView = NSHostingView(rootView:
-            CallaTooltip(accent: accent, step: plan.count > 1 ? progressLabel : step,
-                         text: text, thinking: value,
+            CallaTooltip(accent: accent, step: plan.count > 1 ? progressLabel : currentStep,
+                         text: currentText, thinking: thinking, working: working,
                          startAsking: askingRequested, onEvent: Self.emit))
+        // Rebuilding a panel's contentView takes it out of the window server's
+        // visible list on these borderless non-activating panels, and neither a
+        // later move nor an alpha change puts it back.
+        for panel in [tooltip, cursor] { panel?.orderFrontRegardless() }
     }
 
     /// Puts the narration away and leaves the pointer on screen. Calla is still
@@ -966,12 +1162,6 @@ final class Shortcuts {
         }
     }
 
-    /// Calla's own log line. stdout belongs to the host's command channel, so
-    /// anything diagnostic has to go to stderr.
-    private func note(_ message: String) {
-        FileHandle.standardError.write("[calla] \(message)\n".data(using: .utf8)!)
-    }
-
     func release() {
         for reference in registered { UnregisterEventHotKey(reference) }
         registered = []
@@ -1026,6 +1216,8 @@ struct Command: Decodable {
     let text: String?
     let status: String?
     let thinking: Bool?
+    /// A working status rather than a new beat of the lesson: keep the step.
+    let holding: Bool?
 }
 
 func cocoa(_ p: CGPoint) -> CGPoint {
@@ -1065,11 +1257,32 @@ final class Runner {
     /// Change what the tooltip says without moving the cursor. This is how a
     /// lesson narrates several beats about one control, and how it shows that
     /// the model is still deciding.
-    func narrate(step: String?, text: String?, status: String?, thinking: Bool) {
+    ///
+    /// `holding` means "Calla is working on this step", not "here is the next
+    /// thing to do". Those had been the same call, so pressing "Did it" replaced
+    /// the instruction the learner was halfway through with the word
+    /// "Thinking…" — throwing away the one thing they still needed to read while
+    /// they waited. A held narration keeps the step and its words exactly where
+    /// they are and says what Calla is doing on the working line instead.
+    func narrate(step: String?, text: String?, status: String?, thinking: Bool, holding: Bool = false) {
+        // Only when there is a step to hold on to. Asked from Raycast, this is
+        // the first thing on screen and the very message worth showing, so it
+        // falls through and opens the tooltip like any other beat.
+        if holding, CallaOverlay.shared.isNarrating {
+            CallaOverlay.shared.setWorking(thinking ? (text ?? "Working…") : nil,
+                                           status: status)
+            return
+        }
         self.step = step ?? self.step
         self.text = text ?? self.text
-        guard let last else { return }
-        CallaOverlay.shared.begin(at: last, step: self.step, text: self.text,
+        // Before the first `point` there is no anchor to narrate at, and this
+        // used to return without drawing anything — which is why "Starting a
+        // lesson…" never appeared and the first turn of every lesson looked like
+        // nothing was happening. The centre of the taught window is a truthful
+        // enough place to wait: Calla has not been told where to point yet.
+        let anchor = last ?? CallaOverlay.shared.restingPoint
+        last = anchor
+        CallaOverlay.shared.begin(at: anchor, step: self.step, text: self.text,
                                   status: status ?? "Calla")
         CallaOverlay.shared.setThinking(thinking, step: self.step, text: self.text)
     }
@@ -1087,14 +1300,13 @@ final class Runner {
         // arc was drawn by scheduling a setFrameOrigin per frame, and anything
         // else happening on the main thread showed up as a stutter; handing the
         // whole move to the animator keeps it smooth and costs one call.
-        CallaOverlay.shared.setThinking(true, step: step, text: "Moving to the next control…")
-        CallaOverlay.shared.status("Calla — moving")
+        CallaOverlay.shared.setThinking(false, step: step, text: text)
+        CallaOverlay.shared.setWorking("moving", status: "Calla — moving")
         let seconds = 0.5
         CallaOverlay.shared.glide(from: from, to: target, duration: seconds)
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
             MainActor.assumeIsolated {
-                CallaOverlay.shared.setThinking(false, step: step, text: text)
-                CallaOverlay.shared.status(status)
+                CallaOverlay.shared.setWorking(nil, status: status)
             }
         }
         last = target
@@ -1107,6 +1319,7 @@ final class Runner {
 /// nothing reaches the screen.
 final class OverlayDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        note("helper launched pid \(getpid())")
         MainActor.assumeIsolated {
             CallaOverlay.shared.prepare()
             Shortcuts.shared.install { event in CallaOverlay.emit(event, "") }
@@ -1157,7 +1370,8 @@ Thread.detachNewThread {
                     CallaOverlay.shared.locate()
                 case "narrate":
                     Runner.shared.narrate(step: command.step, text: command.text,
-                                          status: command.status, thinking: command.thinking ?? false)
+                                          status: command.status, thinking: command.thinking ?? false,
+                                          holding: command.holding ?? false)
                 case "hide":
                     CallaOverlay.shared.hide()
                 case "quit":
@@ -1169,6 +1383,7 @@ Thread.detachNewThread {
         }
     }
     // stdin closed: the host is gone, so the overlay should not linger.
+    note("stdin closed -> terminating")
     DispatchQueue.main.async { NSApplication.shared.terminate(nil) }
 }
 
