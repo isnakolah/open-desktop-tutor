@@ -354,6 +354,7 @@ final class CallaOverlay {
     /// Whether a step has asked to be on screen, and whether the learner is
     /// currently looking at the taught application. Both must hold to draw.
     private var narrating = false
+    var isNarrating: Bool { narrating }
     private var ownerIsFrontmost = true
 
     /// Where the current step put the cursor. Every decision about the tooltip
@@ -362,8 +363,8 @@ final class CallaOverlay {
     private var lastPoint: CGPoint?
     /// True while the learner's own pointer is over where the tooltip sits.
     private var pointerIsOver = false
-    private var askingRequested = 0
-    private var currentStep = ""
+    fileprivate var askingRequested = 0
+    fileprivate var currentStep = ""
     private var currentText = ""
     /// The whole route, laid out before the first step. Held so the tooltip can
     /// say which step this is and what follows, without the model having to
@@ -377,7 +378,15 @@ final class CallaOverlay {
     /// The learner pressed something in the tooltip. The host is listening on
     /// this process's stdout, because it owns the connection to Calla.
     static func emit(_ event: String, _ text: String) {
-        if event == "ask" { CallaOverlay.shared.askOpen = false }
+        if event == "ask" {
+            // Close the field and keep it closed. The flag that opens it is
+            // read by every rebuild of the tooltip, so leaving it set meant the
+            // question box came straight back after every send.
+            CallaOverlay.shared.askOpen = false
+            CallaOverlay.shared.askingRequested = 0
+            CallaOverlay.shared.setThinking(true, step: CallaOverlay.shared.currentStep,
+                                            text: "Asking Calla…")
+        }
         let payload: [String: Any] = ["event": event, "text": text]
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let line = String(data: data, encoding: .utf8) else { return }
@@ -976,6 +985,14 @@ final class Shortcuts {
         // outside the process: macOS lets several applications register the
         // same combination, so a successful registration proves nothing.
         note("hotkey \(binding.label) -> \(binding.event)")
+        // A stop with no lesson running is a stray — a duplicate registration
+        // from an earlier build, or a combination the learner meant for the
+        // application underneath. Acting on it tore down lessons that had only
+        // just started.
+        if binding.event == "stop", !CallaOverlay.shared.isNarrating {
+            note("ignored stop: no lesson running")
+            return
+        }
         if binding.event == "ask" {
             CallaOverlay.shared.beginAsking()
         } else {
