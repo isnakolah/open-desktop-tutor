@@ -146,7 +146,15 @@ codesign --force --sign "$SIGN_WITH" --identifier com.calla.tutor-host.overlay "
 codesign --force --sign "$SIGN_WITH" --identifier com.calla.tutor-host "$STAGED_APP"
 codesign --verify --deep --strict "$STAGED_APP"
 
-if [[ "$RESTART" -eq 1 ]] && pgrep -f "Calla TutorHost.app/Contents/MacOS/CallaTutorHost" >/dev/null 2>&1; then
+AGENT_LABEL="com.calla.tutor-host"
+AGENT_MANAGED=0
+if launchctl print "gui/$(id -u)/$AGENT_LABEL" >/dev/null 2>&1; then AGENT_MANAGED=1; fi
+
+# A managed host is restarted by launchctl below, after the new bundle is in
+# place. Killing it here instead would only make launchd relaunch the old binary
+# from a bundle that is about to be replaced.
+if [[ "$RESTART" -eq 1 && "$AGENT_MANAGED" -eq 0 ]] \
+   && pgrep -f "Calla TutorHost.app/Contents/MacOS/CallaTutorHost" >/dev/null 2>&1; then
   echo "Stopping the running TutorHost..."
   pkill -f "Calla TutorHost.app/Contents/MacOS/CallaTutorHost" || true
   pkill -f "CallaOverlayHelper.app/Contents/MacOS/CallaOverlayHelper" || true
@@ -164,7 +172,21 @@ if [[ "$BUILD_ONLY" -eq 1 ]]; then
   exit 0
 fi
 
-open -a "$APP"
+# Let launchd own the process when it is managing one. `open -a` beside a
+# KeepAlive agent is what left two hosts running against one socket, and the
+# loser of that argument took the lesson's overlay down with it. The host now
+# stands down when it finds another one already listening, so any host left over
+# from an earlier `open -a` has to go first — otherwise it holds the socket and
+# launchd's copy would quit and be restarted on a loop.
+if [[ "$AGENT_MANAGED" -eq 1 ]]; then
+  echo "Restarting the $AGENT_LABEL LaunchAgent..."
+  pkill -f "Calla TutorHost.app/Contents/MacOS/CallaTutorHost" || true
+  pkill -f "CallaOverlayHelper.app/Contents/MacOS/CallaOverlayHelper" || true
+  sleep 1
+  launchctl kickstart -k "gui/$(id -u)/$AGENT_LABEL"
+else
+  open -a "$APP"
+fi
 echo
 cat <<EOF
 Calla TutorHost is running in the menu bar.

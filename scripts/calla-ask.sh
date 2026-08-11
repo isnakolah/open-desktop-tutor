@@ -32,8 +32,11 @@ THINKING="${CALLA_THINKING:-low}"
 # Say so on screen before the request leaves. A turn takes tens of seconds, and
 # without this the learner asks from Raycast and watches nothing happen — the
 # tooltip only learns about it when the answer arrives.
+#
+# Skipped when the tooltip's own buttons sent us: it has already said something
+# more specific than "Thinking…", and this would only overwrite it.
 SOCKET="$HOME/Library/Application Support/OpenDesktopTutor/tutor-host.sock"
-if [[ -S "$SOCKET" ]]; then
+if [[ -S "$SOCKET" && "${CALLA_QUIET:-0}" != "1" ]]; then
   /usr/bin/python3 - "$SOCKET" <<'THINKING' >/dev/null 2>&1 || true
 import json, socket, sys, uuid
 envelope = {
@@ -41,14 +44,25 @@ envelope = {
     "request_id": str(uuid.uuid4()),
     "operation": "narrate",
     "session_id": "calla-asking",
-    "payload": {"step": "Calla", "text": "Thinking…", "status": "Calla — thinking", "thinking": True},
+    # Held: this is Calla reporting on itself, so whatever step is on screen
+    # stays there while it works.
+    "payload": {"step": "Calla", "text": "Thinking…", "status": "Calla — thinking",
+                "thinking": True, "holding": True},
 }
 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-s.settimeout(2)
-s.connect(sys.argv[1])
-s.sendall((json.dumps(envelope) + "\n").encode())
-s.recv(4096)
-s.close()
+s.settimeout(5)
+try:
+    s.connect(sys.argv[1])
+    s.sendall((json.dumps(envelope) + "\n").encode())
+finally:
+    s.close()
+# The reply is deliberately not read. Nothing here needs it, and waiting for one
+# is what broke lessons: the host answers on its main actor, which a turn already
+# in progress holds for tens of seconds, so this timed out and hung up — and the
+# reply then landed on a closed socket, raising SIGPIPE and killing the host
+# outright. launchd restarted it, and the overlay, which is the host's own child
+# process, disappeared mid-step. The host ignores SIGPIPE now; this no longer
+# waits around to provoke it.
 THINKING
 fi
 

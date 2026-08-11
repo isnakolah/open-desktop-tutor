@@ -70,15 +70,23 @@ final class LessonRelay: ObservableObject {
         if inFlight?.isRunning == true { return }
 
         // Say which of the two it is. "Checking" and "asking" feel different to
-        // someone who has just finished a step and is waiting to hear.
+        // someone who has just finished a step and is waiting to hear. Held, so
+        // the step they just finished stays on screen while they wait for the
+        // verdict on it.
         PointerOverlay.shared.narrate(step: "Calla",
                                       text: checking ? "Checking your work…" : "Asking Calla…",
                                       status: checking ? "Calla — checking" : "Calla — thinking",
-                                      thinking: true)
+                                      thinking: true, holding: true)
         checking = false
         let task = Process()
         task.executableURL = sender
         task.arguments = [message]
+        // The sender says "Thinking…" for the surfaces that have nothing else to
+        // say it — Raycast, a shell. Here the tooltip has already said something
+        // truer, and letting the generic line land a moment later replaced it.
+        var environment = ProcessInfo.processInfo.environment
+        environment["CALLA_QUIET"] = "1"
+        task.environment = environment
         let output = Pipe()
         task.standardOutput = output
         task.standardError = output

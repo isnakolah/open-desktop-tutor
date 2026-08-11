@@ -4,6 +4,22 @@ import SwiftUI
 
 @main
 struct CallaTutorHostApp: App {
+    /// A client hanging up must never kill the host.
+    ///
+    /// This is what made a lesson vanish mid-step. Every caller reaches the host
+    /// over a Unix socket, and some of them give up early — `calla-ask.sh` waits
+    /// two seconds for its acknowledgement, and a turn can take far longer than
+    /// that. Writing the reply to a socket whose reader has gone raises SIGPIPE,
+    /// whose default action is to terminate the process. The host died, launchd
+    /// restarted it, and the overlay renderer — which lives or dies with the
+    /// stdin pipe its parent holds — went with it: the pointer and the whole
+    /// step disappeared, then came back a turn later from a fresh helper.
+    ///
+    /// Ignoring the signal turns that into an `EPIPE` from `write`, which is
+    /// what the socket code already handles: one dropped reply instead of a
+    /// dead teaching session.
+    init() { signal(SIGPIPE, SIG_IGN) }
+
     @StateObject private var host = TutorHostController.shared
     @StateObject private var settings = TutorSettings.shared
     @NSApplicationDelegateAdaptor(CallaAppDelegate.self) private var appDelegate
