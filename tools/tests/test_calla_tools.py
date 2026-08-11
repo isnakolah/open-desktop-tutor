@@ -102,6 +102,7 @@ class CallaToolTests(unittest.TestCase):
             plugin_allow=["existing-plugin"],
             plugin_paths=["/safe/existing-plugin", "/srv/app/.openclaw/apps/desktop-tutor"],
             allowed_origins=["https://private.nomonlab.com"],
+            agent_list=[{"id": "main", "name": "Main"}],
             node_id="paired-mac-node",
             state_directory=Path("/safe/calla"),
             plugin_path=Path("/safe/calla-plugin"),
@@ -114,13 +115,16 @@ class CallaToolTests(unittest.TestCase):
         self.assertEqual(patch["gateway"]["auth"]["mode"], "none")
         self.assertEqual(patch["gateway"]["bind"], "loopback")
         self.assertEqual(patch["gateway"]["tailscale"]["mode"], "off")
-        self.assertEqual(ownership, {"plugin_allow_added": True, "plugin_path_added": True, "legacy_plugin_paths_removed": True, "legacy_origin_removed": False})
+        self.assertEqual(patch["agents"]["list"][0], {"id": "main", "name": "Main"})
+        self.assertEqual(patch["agents"]["list"][1], gateway_setup.calla_agent_configuration())
+        self.assertEqual(ownership, {"plugin_allow_added": True, "plugin_path_added": True, "legacy_plugin_paths_removed": True, "legacy_origin_removed": False, "calla_agent_added": True})
 
     def test_gateway_patch_does_not_create_an_allowlist_when_none_exists(self) -> None:
         patch, ownership = gateway_setup.build_gateway_patch(
             plugin_allow=None,
             plugin_paths=None,
             allowed_origins=None,
+            agent_list=None,
             node_id=None,
             state_directory=Path("/safe/calla"),
             plugin_path=Path("/safe/calla-plugin"),
@@ -128,6 +132,21 @@ class CallaToolTests(unittest.TestCase):
         self.assertNotIn("allow", patch["plugins"])
         self.assertEqual(patch["plugins"]["load"]["paths"], ["/safe/calla-plugin"])
         self.assertFalse(ownership["legacy_origin_removed"])
+        self.assertEqual(patch["agents"]["list"], [gateway_setup.calla_agent_configuration()])
+
+    def test_gateway_patch_preserves_an_existing_calla_agent(self) -> None:
+        existing = {"id": "calla", "name": "User-owned Calla", "thinkingDefault": "high"}
+        patch, ownership = gateway_setup.build_gateway_patch(
+            plugin_allow=None,
+            plugin_paths=None,
+            allowed_origins=None,
+            agent_list=[existing],
+            node_id=None,
+            state_directory=Path("/safe/calla"),
+            plugin_path=Path("/safe/calla-plugin"),
+        )
+        self.assertEqual(patch["agents"]["list"], [existing])
+        self.assertFalse(ownership["calla_agent_added"])
 
     def test_gateway_installer_is_idempotent_and_removal_stays_in_calla_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -162,6 +181,8 @@ class CallaToolTests(unittest.TestCase):
                     return ["existing-plugin"]
                 if path == "plugins.load.paths":
                     return ["/existing-plugin", "/srv/app/.openclaw/apps/desktop-tutor"]
+                if path == "agents.list":
+                    return [{"id": "main", "name": "Main"}]
                 return ["https://private.nomonlab.com"]
 
             with redirect_stdout(io.StringIO()):
@@ -178,6 +199,7 @@ class CallaToolTests(unittest.TestCase):
             receipt = json.loads((state_directory / "install-receipt.json").read_text())
             self.assertFalse(receipt["legacy_origin_removed"])
             self.assertTrue(receipt["plugin_path_added"])
+            self.assertTrue(receipt["calla_agent_added"])
             self.assertEqual(len([dry_run for _patch, dry_run in calls if dry_run]), 2)
 
             removal_calls: list[dict] = []
@@ -187,6 +209,8 @@ class CallaToolTests(unittest.TestCase):
                     return ["desktop-tutor", "existing-plugin"]
                 if path == "plugins.load.paths":
                     return [str(REPOSITORY_ROOT / "integrations" / "openclaw"), "/existing-plugin"]
+                if path == "agents.list":
+                    return [{"id": "main", "name": "Main"}, gateway_setup.calla_agent_configuration()]
                 return ["https://private.nomonlab.com"]
 
             def capture_removal(_binary, removal_patch, *, dry_run):
@@ -209,6 +233,7 @@ class CallaToolTests(unittest.TestCase):
             self.assertEqual(final_patch["plugins"]["entries"]["desktop-tutor"], None)
             self.assertEqual(final_patch["plugins"]["allow"], ["existing-plugin"])
             self.assertEqual(final_patch["plugins"]["load"]["paths"], ["/existing-plugin"])
+            self.assertEqual(final_patch["agents"]["list"], [{"id": "main", "name": "Main"}])
 
 
 if __name__ == "__main__":

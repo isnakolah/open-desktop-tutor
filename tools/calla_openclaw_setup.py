@@ -17,6 +17,7 @@ from typing import Any
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ID = "desktop-tutor"
+CALLA_AGENT_ID = "calla"
 DEFAULT_STATE_DIRECTORY = Path.home() / ".openclaw" / "calla"
 # This was the earlier workspace prototype. The standalone rewrite is now the
 # configured source of truth on this host, so never leave both IDs loadable.
@@ -24,6 +25,21 @@ LEGACY_TUTOR_PLUGIN_PATHS = {"/srv/app/.openclaw/apps/desktop-tutor"}
 # The previous public setup added this browser-control origin. The private
 # one-user route does not need it, so remove only this exact obsolete value.
 LEGACY_CALLA_ORIGINS = {"https://calla.nomonlab.com"}
+
+# Keep Calla's prompt small and purpose-built.  These are all of the plugin's
+# teaching tools: omitting one makes an otherwise-supported pack or recovery
+# path inaccessible.  The minimal profile removes unrelated coding, browser,
+# and messaging schemas from the teaching agent's prompt.
+CALLA_AGENT_TOOLS = (
+    "tutor_observe",
+    "tutor_retrieve",
+    "tutor_guide",
+    "tutor_await_change",
+    "tutor_narrate",
+    "tutor_point",
+    "tutor_propose_action",
+    "tutor_verify",
+)
 
 
 class SetupError(RuntimeError):
@@ -71,11 +87,57 @@ def remove_known(values: Any, known_values: set[str]) -> tuple[list[str] | None,
     return remaining, len(remaining) != len(values)
 
 
+def calla_agent_configuration() -> dict[str, Any]:
+    """Return the isolated, low-latency OpenClaw agent Calla owns."""
+    return {
+        "id": CALLA_AGENT_ID,
+        "name": "Calla",
+        # The Mac launcher also passes --thinking low so this remains true for
+        # every teaching turn even if another session has a higher override.
+        "thinkingDefault": "low",
+        # The teaching prompt and plugin schemas are stable across the lesson.
+        # This is agent-local, rather than changing cache policy for other work.
+        "params": {"cacheRetention": "long"},
+        "tools": {
+            "profile": "minimal",
+            "alsoAllow": list(CALLA_AGENT_TOOLS),
+        },
+    }
+
+
+def append_calla_agent(agent_list: Any) -> tuple[list[dict[str, Any]], bool]:
+    """Append Calla without changing a user-owned agent with the same id."""
+    if agent_list is None:
+        return [calla_agent_configuration()], True
+    if not isinstance(agent_list, list):
+        raise SetupError("existing OpenClaw agents.list configuration is not an array")
+    for entry in agent_list:
+        if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
+            raise SetupError("existing OpenClaw agents.list must contain object entries with string ids")
+        if entry["id"] == CALLA_AGENT_ID:
+            return agent_list, False
+    return [*agent_list, calla_agent_configuration()], True
+
+
+def remove_calla_agent(agent_list: Any) -> tuple[list[dict[str, Any]] | None, bool]:
+    """Remove only the dedicated agent Calla's installer created."""
+    if agent_list is None:
+        return None, False
+    if not isinstance(agent_list, list):
+        raise SetupError("existing OpenClaw agents.list configuration is not an array")
+    for entry in agent_list:
+        if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
+            raise SetupError("existing OpenClaw agents.list must contain object entries with string ids")
+    remaining = [entry for entry in agent_list if entry["id"] != CALLA_AGENT_ID]
+    return remaining, len(remaining) != len(agent_list)
+
+
 def build_gateway_patch(
     *,
     plugin_allow: Any,
     plugin_paths: Any,
     allowed_origins: Any,
+    agent_list: Any,
     node_id: str | None,
     state_directory: Path,
     plugin_path: Path,
@@ -87,6 +149,7 @@ def build_gateway_patch(
         legacy_paths_removed = any(path in LEGACY_TUTOR_PLUGIN_PATHS for path in paths)
         paths = [path for path in paths if path not in LEGACY_TUTOR_PLUGIN_PATHS]
     origins, legacy_origin_removed = remove_known(allowed_origins, LEGACY_CALLA_ORIGINS)
+    agents, calla_agent_added = append_calla_agent(agent_list)
     plugin_config: dict[str, Any] = {
         "role": "gateway",
         "stateDirectory": str(state_directory),
@@ -110,6 +173,9 @@ def build_gateway_patch(
             # this loopback listener; the Gateway itself remains unexposed.
             "tailscale": {"mode": "off", "resetOnExit": False},
         },
+        # config patch replaces arrays, so the installer reads and preserves
+        # every existing agent before appending Calla's isolated one.
+        "agents": {"list": agents},
     }
     if legacy_origin_removed:
         patch["gateway"]["controlUi"] = {"allowedOrigins": origins}
@@ -120,6 +186,7 @@ def build_gateway_patch(
         "plugin_path_added": path_added,
         "legacy_plugin_paths_removed": legacy_paths_removed,
         "legacy_origin_removed": legacy_origin_removed,
+        "calla_agent_added": calla_agent_added,
     }
 
 
@@ -189,10 +256,12 @@ def install(arguments: argparse.Namespace) -> int:
     plugin_allow = read_json_config(binary, "plugins.allow")
     plugin_paths = read_json_config(binary, "plugins.load.paths")
     allowed_origins = read_json_config(binary, "gateway.controlUi.allowedOrigins")
+    agent_list = read_json_config(binary, "agents.list")
     patch, ownership = build_gateway_patch(
         plugin_allow=plugin_allow,
         plugin_paths=plugin_paths,
         allowed_origins=allowed_origins,
+        agent_list=agent_list,
         node_id=arguments.node_id,
         state_directory=state_directory,
         plugin_path=arguments.repository.resolve() / "integrations" / "openclaw",
@@ -225,6 +294,7 @@ def install(arguments: argparse.Namespace) -> int:
         "plugin_path_added": prior_receipt.get("plugin_path_added", False) or ownership["plugin_path_added"],
         "legacy_plugin_paths_removed": prior_receipt.get("legacy_plugin_paths_removed", False) or ownership["legacy_plugin_paths_removed"],
         "legacy_origin_removed": prior_receipt.get("legacy_origin_removed", False) or ownership["legacy_origin_removed"],
+        "calla_agent_added": prior_receipt.get("calla_agent_added", False) or ownership["calla_agent_added"],
     }
     atomic_json(state_directory / "install-receipt.json", receipt)
     if arguments.app_pack:
@@ -285,12 +355,17 @@ def remove(arguments: argparse.Namespace) -> int:
         raise SetupError("refusing to remove state that was not created by this Calla installer")
     plugin_allow = read_json_config(binary, "plugins.allow")
     plugin_paths = read_json_config(binary, "plugins.load.paths")
+    agent_list = read_json_config(binary, "agents.list")
     plugins: dict[str, Any] = {"entries": {PLUGIN_ID: None}}
     if receipt.get("plugin_allow_added") and isinstance(plugin_allow, list):
         plugins["allow"] = [item for item in plugin_allow if item != PLUGIN_ID]
     if receipt.get("plugin_path_added") and isinstance(plugin_paths, list):
         plugins["load"] = {"paths": [item for item in plugin_paths if item != str(arguments.repository.resolve() / "integrations" / "openclaw")]}
     patch: dict[str, Any] = {"plugins": plugins}
+    if receipt.get("calla_agent_added"):
+        remaining_agents, removed = remove_calla_agent(agent_list)
+        if removed:
+            patch["agents"] = {"list": remaining_agents}
     print("Calla removal patch:")
     print(json.dumps(patch, indent=2, sort_keys=True))
     patch_config(binary, patch, dry_run=True)

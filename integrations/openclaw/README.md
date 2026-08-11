@@ -45,6 +45,25 @@ Gateway configuration is additive:
 the Gateway, because the Gateway itself remains loopback-bound. Use
 `role: "node"` on the Mac. It must not register Gateway tools.
 
+## Teaching-agent latency policy
+
+The additive server installer creates an isolated `calla` agent and leaves the
+Gateway's global agent defaults unchanged. Its configuration is intentionally
+narrow:
+
+- `thinkingDefault: "low"`; the Mac launcher also passes `--thinking low` for
+  every turn, so Calla does not inherit a slower session or global default.
+- `params.cacheRetention: "long"`, which lets OpenClaw reuse the stable
+  teaching prompt, plugin schemas, and tool definitions across a lesson.
+- the `minimal` tool profile plus exactly Calla's eight `tutor_*` tools, keeping
+  unrelated coding, messaging, and browser schemas out of the teaching prompt.
+
+The launcher sends to this agent explicitly (`openclaw agent --agent calla`).
+`fastMode: "auto"` is deliberately not enabled by the installer: it is a
+priority-processing experiment with a billing tradeoff, and the current
+`openclaw agent` CLI has no one-turn fast-mode flag. Test it through a
+`chat.send` caller before opting it into this path.
+
 ## Server-local App Pack retrieval
 
 `tutor_retrieve` runs on the Gateway; it does not round-trip to the Mac. It requires the active application bundle ID and version, then filters packs by their `apps` compatibility constraints and entities by optional `app_versions`.
